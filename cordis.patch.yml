@@ -1,0 +1,5 @@
+# dsh-emotion bundle patch —— 把情绪引擎挂进 profile 配置树。
+# id 固定；name 必须是包名（cordis 按 name import 包）。
+- insert:
+    - id: mo-emotion
+      name: 'dsh-emotion'

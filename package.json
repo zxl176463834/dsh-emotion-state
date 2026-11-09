@@ -1,0 +1,56 @@
+{
+  "name": "dsh-emotion",
+  "version": "0.9.0",
+  "description": "给 AI Agent 的情绪引擎：9 维衰减 + 亲密度轴 + 信任 + 组合情绪 + 两本账",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/index.js.map",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "emotion",
+    "mood",
+    "agent",
+    "state-machine",
+    "persona",
+    "affective-computing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-emotion.git"
+  },
+  "homepage": "https://github.com/OWNER/dsh-emotion#readme",
+  "bugs": {
+    "url": "https://github.com/OWNER/dsh-emotion/issues"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node check.mjs",
+    "check:panel": "node panel-check.mjs"
+  }
+}
