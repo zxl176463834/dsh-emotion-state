@@ -1,7 +1,7 @@
 {
   "name": "dsh-emotion",
   "version": "0.9.0",
-  "description": "给 AI Agent 的情绪引擎：9 维衰减 + 亲密度轴 + 信任 + 组合情绪 + 两本账",
+  "description": "�?AI Agent 的情绪引擎：9 维衰�?+ 亲密度轴 + 信任 + 组合情绪 + 两本�?,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -42,11 +42,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/dsh-emotion.git"
+    "url": "git+https://github.com/zxl176463834/dsh-emotion-state.git"
   },
-  "homepage": "https://github.com/OWNER/dsh-emotion#readme",
+  "homepage": "https://github.com/zxl176463834/dsh-emotion-state#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/dsh-emotion/issues"
+    "url": "https://github.com/zxl176463834/dsh-emotion-state/issues"
   },
   "scripts": {
     "build": "node build.mjs",
