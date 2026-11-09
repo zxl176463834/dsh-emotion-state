@@ -77,7 +77,7 @@ export async function composePing(ctx: any, agent: any, st: any, idleMin: number
         role: 'user',
         id: randomUUID(),
         content: [{ type: 'text', text: user }],
-        source: { kind: 'plugin', plugin: 'dsh-emotion' },
+        source: { kind: 'plugin', plugin: 'dsh-emotion-state' },
       }],
       maxTokens: 200,
       // 要灵活，别每次一个腔调

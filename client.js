@@ -8,7 +8,7 @@
  * 2026-11-06 重设计：雷达 9 根（去掉心疼、甜，加上生气、惊讶）；平静改成轴；信任单独一行。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-emotion',
+  id: 'dsh-emotion-state',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports

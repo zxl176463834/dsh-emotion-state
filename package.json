@@ -1,7 +1,7 @@
 {
-  "name": "dsh-emotion",
+  "name": "dsh-emotion-state",
   "version": "0.9.0",
-  "description": "�?AI Agent 的情绪引擎：9 维衰�?+ 亲密度轴 + 信任 + 组合情绪 + 两本�?,
+  "description": "给 AI Agent 的情绪引擎：9 维衰减 + 亲密度轴 + 信任 + 组合情绪 + 两本账",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -29,6 +29,19 @@
       ]
     }
   },
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node check.mjs",
+    "check:panel": "node panel-check.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zxl176463834/dsh-emotion-state.git"
+  },
+  "homepage": "https://github.com/zxl176463834/dsh-emotion-state#readme",
+  "bugs": {
+    "url": "https://github.com/zxl176463834/dsh-emotion-state/issues"
+  },
   "license": "MIT",
   "keywords": [
     "deepseek-harness",
@@ -39,18 +52,5 @@
     "state-machine",
     "persona",
     "affective-computing"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/zxl176463834/dsh-emotion-state.git"
-  },
-  "homepage": "https://github.com/zxl176463834/dsh-emotion-state#readme",
-  "bugs": {
-    "url": "https://github.com/zxl176463834/dsh-emotion-state/issues"
-  },
-  "scripts": {
-    "build": "node build.mjs",
-    "check": "node check.mjs",
-    "check:panel": "node panel-check.mjs"
-  }
+  ]
 }
