@@ -121,6 +121,8 @@ ok('九根没有拖动条（心情不能手动改）', !src.includes('moe-slider
 ok('有走势图（SVG 折线）', src.includes('moe-trend') && src.includes('polyline'))
 ok('有边界账卡片', text.includes('边界账') && text.includes('本周吵架'))
 ok('九根那行没有重置按钮', !src.includes('doReset') && !src.includes('/mo-emotion/reset'))
+// 2026-11-09 补回加减分判定
+ok('这一轮判了什么（加减分判定）', src.includes('这一轮判了什么') && src.includes('lastDeltas'))
 
 
 // 没有 lastChange 时要给「还没动过」

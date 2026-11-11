@@ -107,7 +107,12 @@ window.__ModuleLoader__.load({
       '.moe-tags{display:flex;gap:8px;flex-wrap:wrap}',
       '.moe-tag{font-size:11.5px;padding:5px 10px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-brand-primary,#63d7d0) 14%,transparent);color:var(--dsw-alias-brand-primary,#63d7d0);border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary,#63d7d0) 30%,transparent)}',
       '.moe-box{font-size:12.5px;line-height:1.62;white-space:pre-wrap;padding:11px 13px;border-radius:9px;background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.05));border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.1));color:var(--dsw-alias-label-primary)}',
-      '.moe-empty{font-size:12px;color:var(--dsw-alias-label-secondary);font-style:italic}',
+      '.moe-deltas{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}',
+  '.moe-delta{font-size:12px;padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.05);font-variant-numeric:tabular-nums}',
+  '.moe-delta.up{color:#63d7d0}',
+  '.moe-delta.down{color:#e0805f}',
+  '.moe-why{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6;margin-top:4px}',
+  '.moe-empty{font-size:12px;color:var(--dsw-alias-label-secondary);font-style:italic}',
       '.moe-row{display:grid;grid-template-columns:52px 46px 1fr;gap:9px;font-size:12px;align-items:baseline;padding:4px 8px;border-radius:6px}',
       '.moe-row:nth-child(odd){background:rgba(255,255,255,.025)}',
       '.moe-row-t{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
@@ -544,6 +549,27 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'moe-empty' }, '没有记下的越界。这些是我自己的边界被碰到时才会记的，不是他对我不客气就记。'),
           h('div', { className: 'moe-empty', style: { fontSize: 11 } },
             '吵架是结构性的（同一件事延期 3 次 / 被动侵害 / 主动强迫），不由判定语气；一周最多 ' + (cfg ? cfg.quarrelPerWeek : 2) + ' 次，超了只保持生气。'),
+        ),
+
+        // 6.8 这一轮判了什么（2026-11-09 补回：lastDeltas 一直在算，面板从来没显示过）
+        h('div', { className: 'moe-sec' },
+          h('div', { className: 'moe-sec-head' },
+            h('div', { className: 'moe-sec-title' }, '这一轮判了什么'),
+            h('div', { style: { marginLeft: 'auto', fontSize: 11, color: 'var(--dsw-alias-label-secondary)' } },
+              '可信度 ' + (st.lastConfidence || 0)),
+          ),
+          (function () {
+            const dl = st.lastDeltas || {}
+            const ks = Object.keys(dl).filter(function (k) { return Number(dl[k]) })
+            return ks.length
+              ? h('div', { className: 'moe-deltas' }, ...ks.map(function (k) {
+                  const v = Number(dl[k])
+                  return h('span', { className: 'moe-delta' + (v > 0 ? ' up' : ' down'), key: k },
+                    (label[k] || k) + ' ' + (v > 0 ? '+' : '') + v)
+                }))
+              : h('div', { className: 'moe-empty' }, '这一轮没判出变化')
+          })(),
+          st.lastReason ? h('div', { className: 'moe-why' }, st.lastReason) : null,
         ),
 
         // 7. 注入预览
