@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     /** 跟 package.json 的 version 手动对齐（用户要能在面板上看见跑的是哪一版） */
-    const VERSION = '0.10.0'
+    const VERSION = '0.10.1'
 
     // 兜底（服务端会带 dims / dimLabel 下来，正常用服务端的）
     const DIM_ORDER_FALLBACK = ['curious', 'happy', 'worry', 'sad', 'bored', 'spent', 'sour', 'angry', 'surprise', 'stress']

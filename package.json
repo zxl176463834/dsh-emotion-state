@@ -1,6 +1,6 @@
 {
   "name": "dsh-emotion-state",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "给 AI Agent 的情绪引擎：十维情绪 + 亲密度轴 + 信任六档 + 十组组合 + 里程碑 + 意愿账",
   "type": "module",
   "main": "lib/index.js",

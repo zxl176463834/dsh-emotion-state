@@ -19,9 +19,13 @@ try {
   process.exit(1)
 }
 
+// 某些环境（如运行中的宿主）自带 node 是 Low 完整性，写不进去：
+//   设 MO_OUT 时先吐到临时目录，由外部拷回 lib。
+const OUT = process.env.MO_OUT || 'lib/index.js'
+
 await build({
   entryPoints: ['src/index.ts'],
-  outfile: 'lib/index.js',
+  outfile: OUT,
   bundle: true,
   format: 'esm',
   platform: 'node',
@@ -29,6 +33,11 @@ await build({
   sourcemap: false,
   logLevel: 'info',
 })
+
+if (process.env.MO_OUT) {
+  console.log('[构建] 已输出到 ' + OUT + '，跳过自检（拷回 lib 后单独跑 check.mjs）')
+  process.exit(0)
+}
 
 // ① client.js 语法（new Function 只解析不执行，不会碰 window）
 try {

@@ -31,7 +31,7 @@ import {
 export const name = 'mo-emotion'
 
 /** 跟 package.json 的 version 手动对齐（用户要能在面板上看见跑的是哪一版） */
-export const VERSION = '0.10.0'
+export const VERSION = '0.10.1'
 
 // 调试/设置页用：把纯函数露出来（不影响插件行为）
 // 2026-11-16：改成 `export *` —— 原来是一份手写的具名列表，加函数忘了同步就静默漏掉
@@ -337,7 +337,11 @@ export async function sayInSession(agent: any, text: string): Promise<{ ok: bool
     const 消息 = {
       id: 'mo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
       role: 'user',
-      content: [{ type: 'text', text: String(text) }],
+      // 2026-11-18：末尾挂一个 ⌁ 暗号。下一轮我看到它以 ⌁ 结尾，就知道
+      //   「这句是我自己主动说的」，只当已经说过、不再接话——
+      //   否则 followup 伪装成 user 消息，我会把它当成用户在问，说一句答一句，自问自答。
+      //   用可见符号不用零宽字符：零宽很可能在分词那步被吃掉，看不见也就认不出。
+      content: [{ type: 'text', text: String(text).trimEnd() + ' ⌁' }],
       source: { kind: 'mo-emotion' },
     }
     await agent.followup(消息)
