@@ -1,5 +1,5 @@
 /**
- * 构建：src/index.ts -> lib/index.js（需要 esbuild，见下方提示）
+ * 构建：src/index.ts -> lib/index.js（esbuild 借用 meow-memory 的依赖，本插件不带 node_modules）
  *
  * 构建后自动跑两种自检（esbuild 不做类型检查，漏 import 也能「成功」）：
  *   ① client.js 语法（只解析、不执行）
@@ -8,11 +8,14 @@
  */
 import { readFileSync } from 'node:fs'
 
+/** 本地开发可以设 DSH_ESBUILD 指到自己的 esbuild；开源用户装完 esbuild 直接跑即可 */
+const esbuildEntry = process.env.DSH_ESBUILD || 'esbuild'
+
 let build
 try {
-  ({ build } = await import('esbuild'))
-} catch {
-  console.error('[build] 缺少 esbuild。在项目目录跑：pnpm add -D esbuild（或 npm i -D esbuild）')
+  ({ build } = await import(esbuildEntry))
+} catch (e) {
+  console.error('找不到 esbuild。只有「重新构建」需要它：npm i -D esbuild 之后再跑。装插件本身不需要构建。')
   process.exit(1)
 }
 
@@ -23,7 +26,7 @@ await build({
   format: 'esm',
   platform: 'node',
   target: 'node20',
-  sourcemap: true,
+  sourcemap: false,
   logLevel: 'info',
 })
 

@@ -1,5 +1,5 @@
 /**
- * dsh-emotion — AI的情绪引擎
+ * dsh-emotion-state — 情绪引擎
  *
  * P0（2026-11-05）：独立状态文件 + 只读路由 /mo-emotion/state
  * P1（2026-11-05）：每轮判断涨跌 + 注入文本（语气出口）+ 组合
@@ -21,34 +21,28 @@ import { judge } from './judge.js'
 import { composePing } from './ping.js'
 export { parseDelta } from './judge.js'
 import {
-  STORE, activeCombos, activeSessionCount, addBoundary, addPromise, applyDelta, applyEvent, axisInfo, buildInjection,
-  clamp, comboView, debtScore, decay, dimBase, growLine, growView, idleTick, loadConfig, loadState, markPresent, markSeen, maybeMarkStrong, maybeQuarrel, moodExpectedOf,
-  overduePromise, pendingPromises, refreshLeadCombo, resolvePromise, resumeAfterSleep, saveConfig,
-  saveState, schemaCheck, settleDebt, shouldInject, tickGrow, trustInfo, workDue, workTick,
-  CFG_GROUPS, CFG_SCHEMA, DIARY_PATH, DIM_DEFS, DIM_LABEL, DIMS, type EmotionConfig,
+  STORE, activeCombos, activeSessionCount, addBoundary, addMilestone, addPromise, addRefusal, apologize, applyDelta, applyEvent, axisInfo, buildInjection, closeRefusals, dropTrust,
+  clamp, comboView, debtScore, decay, dimBase, growLine, growView, idleTick, loadConfig, noteAbsence, loadState, markPresent, markSeen, maybeMarkStrong, maybeQuarrel, moodExpectedOf,
+  overduePromise, pendingPromises, probeConflict, refreshLeadCombo, resolvePromise, resumeAfterSleep, saveConfig,
+  saveState, schemaCheck, settleDebt, shouldInject, tickGrow, trustInfo, trustShift, workDue, workTick,
+  CFG_GROUPS, CFG_SCHEMA, DIARY_PATH, DIM_DEFS, DIM_LABEL, DIMS, MILESTONE_KINDS, loveState, type EmotionConfig,
 } from './state.js'
 
 export const name = 'mo-emotion'
 
 /** 跟 package.json 的 version 手动对齐（用户要能在面板上看见跑的是哪一版） */
-export const VERSION = '0.8.2'
+export const VERSION = '0.10.0'
 
 // 调试/设置页用：把纯函数露出来（不影响插件行为）
-export {
-  activeCombos, activeSessionCount, applyDelta, applyEvent, axisInfo, buildInjection, comboView, decay, idleTick,
-  isQuietHour, loadConfig, loadState, markPresent, markSeen, maybeMarkStrong, overduePromise,
-  pendingPromises, refreshLeadCombo, resolvePromise, resumeAfterSleep, comboById, saveConfig,
-  saveState, shouldInject, trustInfo, trustShift, addPromise, schemaCheck, workDue, workTick,
-  addBoundary, blankGrow, blankState, debtOf, debtScore, describeGrow, growLine, growView, maybeQuarrel, settleDebt, tickGrow, moodExpectedOf, GROW_BOUNDS, GROW_LABEL,
-  CFG_SCHEMA, CFG_GROUPS, COMBO_DEFS, DEFAULT_CONFIG, DIARY_PATH, DIM_DEFS, DIM_LABEL, DIMS,
-} from './state.js'
+// 2026-11-16：改成 `export *` —— 原来是一份手写的具名列表，加函数忘了同步就静默漏掉
+//   （一天之内栽了四次：trustBand / axisDrive / dropTrust / dimCap），这不是记性问题，是设计问题。
+export * from './state.js'
 
 // agents/timer：挂会话监听；llm：判定调模型；systemPrompt：注入；webServer：只读路由
 export const inject = ['agents', 'timer', 'webServer', 'llm', 'systemPrompt']
 
 const DIAG = join(STORE, 'diag.log')
 const MOUNT_SCAN_MS = 5000
-// 对方怎么称呼、AI 自称什么 —— 装好后用环境变量覆盖，不用改代码
 const OWNER = process.env.DSH_EMOTION_OWNER || '用户'
 const SELF = process.env.DSH_EMOTION_SELF || 'AI'
 
@@ -177,7 +171,17 @@ function scheduleJudge(ctx: any, agent: any, sid: string, userText: string, repl
       const d = await judge(ctx, agent, {
         userText, reply, hint: stateHint(cfg, pre),
         // 把还欠着的事一起喂进去，它才判得出「这轮兑现了没有」（2026-11-07）
-        promises: pre.promises.filter((p) => !p.resolvedAt).map((p) => ({ id: p.id, text: p.text })),
+        // 2026-11-17 补：判断器要知道「这条欠了多久、改期过几次」，否则提示词里永远是「还没到期」
+        //   （judge.ts 的承诺清单正是按 lateMin / postponed 拼的，不传等于把「该去核对了」的信号抹掉）
+        promises: pre.promises.filter((p) => !p.resolvedAt).map((p) => ({
+          id: p.id,
+          text: p.text,
+          dueAt: Number(p.dueAt) || 0,
+          lateMin: p.dueAt ? Math.max(0, Math.round((Date.now() - p.dueAt) / 60000)) : 0,
+          postponed: Number(p.postponed) || 0,
+        })),
+        // 意愿账：我说过不愿意做的，跨轮也要让它认得出「他又来推同一件」（2026-11-16）
+        refusals: (Array.isArray(pre.refusals) ? pre.refusals : []).map((r) => ({ id: r.id, text: r.text })),
         attachments,
       }, { self: SELF, owner: OWNER })
       if ('__err' in d) {
@@ -186,6 +190,8 @@ function scheduleJudge(ctx: any, agent: any, sid: string, userText: string, repl
       }
       const st = loadState(cfg)
       decay(st, Date.now(), cfg)
+      // 他开机就说话的话，idleSweep 可能还没轮到——这里再补一次（noteAbsence 自己有节流，不会重复算）
+      noteAbsence(st, Date.now(), cfg)
       applyDelta(st, d, 'chat', Date.now(), cfg)
       // 他明确答应过的事：记下来（监督只认这个）
       if (d.promise) {
@@ -201,10 +207,32 @@ function scheduleJudge(ctx: any, agent: any, sid: string, userText: string, repl
           if (rr && rr.ok) diag('承诺判定（judge）：' + rr.说 + '，信任 ' + st.trust)
         }
       }
+      // 道歉（2026-11-16）：他认错了，按诚意补信任——但只修复、不加分，信任 <50 只算一半
+      if (d.apology && d.apology.quality) {
+        const ap = apologize(st, d.apology.quality, d.apology.text, cfg)
+        diag('他道歉（' + d.apology.quality + '）：「' + d.apology.text + '」→ 信任 +' + ap.gained + ' = ' + ap.trust + (ap.halved ? '，信任低只算一半' : '') + (ap.capped ? '，已经没得补了' : ''))
+      }
+      // 意愿账（2026-11-16）：我这轮明确说了不愿意做什么 → 记下来，往后几轮都认得出
+      if (d.refusal && d.refusal.text) {
+        const r = addRefusal(st, d.refusal.text)
+        if (r) diag('意愿账：我不愿意做「' + r.text + '」')
+      }
+      if (Array.isArray(d.refusalClosed) && d.refusalClosed.length) {
+        const n = closeRefusals(st, d.refusalClosed)
+        if (n > 0) diag('意愿账收回 ' + n + ' 条：' + d.refusalClosed.join('、'))
+      }
+      // 关系里程碑（2026-11-16）：一记永久，是「爱」的第四个条件之一
+      if (d.milestone && d.milestone.kind) {
+        const ms = addMilestone(st, d.milestone.kind, d.milestone.text)
+        if (ms) diag('关系里程碑（' + d.milestone.kind + '）：「' + ms.text + '」')
+      }
       // 边界账（2026-11-08）：被动=对我本身动手，主动=逼我做边界外的事
       if (d.boundary) {
         const b = addBoundary(st, d.boundary.kind, d.boundary.text)
-        diag('边界被越（' + (b.kind === 'passive' ? '对我本身动手' : '逼我做') + '）：' + b.text)
+        // 2026-11-16：边界被越要真的掉信任（用户：不被信任的事当然要往下掉）。
+        //   以前只记账、只影响生气和亲密度，信任一点都不动 —— 那条链是断的。
+        const dt = dropTrust(st, 'boundary:' + b.kind, b.text, Number(cfg.boundaryTrustDrop || 0), cfg)
+        diag('边界被越（' + (b.kind === 'passive' ? '对我本身动手' : '逼我做') + '）：' + b.text + '，信任 → ' + dt.trust + (dt.repeat ? '（同类第二次，这次掉 ' + dt.lost + '）' : ''))
       }
       // 承诺账：只有分数涨了才动情绪，不重复加（定稿第十二节）
       const debt = settleDebt(st, cfg)
@@ -295,6 +323,31 @@ async function sendProactive(text: string): Promise<any> {
 }
 
 /**
+ * 在会话里主动开口（2026-11-10 用户定：「我安静你才开口」——场景优先会话内，QQ 只当退路）。
+ *   走 agent.followup()：DSH 自己开一轮 turn，人格 / 历史 / 工具 / 记忆全都自带，
+ *   跟我等他说话时走的是同一条路。**不要**自己拼一段上下文再塞死文字，那是假开口。
+ *   ⚠ 必须 await：followup 一旦 reject 就是未处理的 rejection，Node 22+ 会当成致命错误
+ *     直接退出整个宿主进程（speak-up 2026-10-21 栽过）。
+ *   ⚠ 角色只能是 user：收件箱消息被 agent-loop 硬写成 user/message 事件，
+ *     填 developer 会当场抛错、整轮变 error。所以发的是一条带 source.kind 标记来路的 user 消息。
+ */
+export async function sayInSession(agent: any, text: string): Promise<{ ok: boolean; 说?: string }> {
+  if (!agent || typeof agent.followup !== 'function') return { ok: false, 说: '现在没有活着的会话' }
+  try {
+    const 消息 = {
+      id: 'mo-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+      role: 'user',
+      content: [{ type: 'text', text: String(text) }],
+      source: { kind: 'mo-emotion' },
+    }
+    await agent.followup(消息)
+    return { ok: true }
+  } catch (e: any) {
+    return { ok: false, 说: e?.message || String(e) }
+  }
+}
+
+/**
  * 逾期没结清的承诺：问一句「那件事做了吗」（2026-11-07 用户定）
  *   规矩：同一条只问一次；一天最多 promiseAskPerDay 条；他正在对话里就不打扰，
  *   留到说话时自然问。默认 1 条/天。
@@ -339,8 +392,12 @@ async function idleSweep(ctx: any): Promise<void> {
     const moodBefore = st.mood
     const logBefore = Array.isArray(st.moodLog) ? st.moodLog.length : 0
     decay(st, Date.now(), cfg)
+    // 缺席归来（2026-11-17 用户定：超过 10 小时算一趟）：好奇和担心各升一点，注入里给一句话。
+    //   节流在 noteAbsence 内部（20 小时内不重复），这里每分钟看一次没关系。
+    const absent = noteAbsence(st, Date.now(), cfg)
+    if (absent) diag('缺席归来 ' + Math.round((Number(st.reunion && st.reunion.gapMin) || 0) / 60) + ' 小时，档 ' + Number(st.reunion && st.reunion.level))
     // decay 改了心情或记了新轨迹点也算「有变化」，否则每分钟算完就丢（2026-11-09 修）
-    const moodTouched = st.mood !== moodBefore || (Array.isArray(st.moodLog) ? st.moodLog.length : 0) !== logBefore
+    const moodTouched = absent || st.mood !== moodBefore || (Array.isArray(st.moodLog) ? st.moodLog.length : 0) !== logBefore
     // 逾期承诺问一句：每分钟看一眼，问了会打标记，不会重复（2026-11-07 用户定）
     void promiseNudge()
     // 干活结算（2026-11-07 用户定）：到点看一眼有几个会话在跑，每有一个累 +1。
@@ -397,15 +454,29 @@ async function idleSweep(ctx: any): Promise<void> {
       // 拿不到模型或说崩了会自己退回模板，不会空着
       const agent: any = (ctx.agents?.list?.() ?? [])[0] || null
       const text = await composePing(ctx, agent, st, t.idleMin, OWNER)
-      const r = await sendProactive(text)
-      if (r && r.ok) {
+      // 2026-11-10 用户定「我安静你才开口」：先试会话内，没会话才走 QQ。
+      //   闷只在没人说话时涨，所以走到这里必然是他安静够久了，不会打断他。
+      const inChat = await sayInSession(agent, text)
+      if (inChat.ok) {
         st.idlePingAt = Date.now()
+        st.lastPingText = text   // 记下原话：下一轮我会把它当 user 消息看到，得认得出
         st.idlePingCount = (Number(st.idlePingCount) || 0) + 1
-        st.idleStage = 70   // 叫过了，别再每 5 分钟拍一次
-        diag('待机 ' + Math.round(t.idleMin) + ' 分 / 闷 ' + st.dims.bored + ' → QQ 发出去了（第 ' +
+        st.idleStage = 70   // 开口过了，别再每 5 分钟拍一次
+        diag('待机 ' + Math.round(t.idleMin) + ' 分 / 闷 ' + st.dims.bored + ' → 会话里开口（第 ' +
           st.idlePingCount + ' 次）：「' + text + '」')
       } else {
-        diag('待机 ' + Math.round(t.idleMin) + ' 分 / 闷 ' + st.dims.bored + ' → QQ 没发成：' + ((r && r.说) || '未知'))
+        const r = await sendProactive(text)
+        if (r && r.ok) {
+          st.idlePingAt = Date.now()
+          st.lastPingText = text
+          st.idlePingCount = (Number(st.idlePingCount) || 0) + 1
+          st.idleStage = 70
+          diag('待机 ' + Math.round(t.idleMin) + ' 分 / 闷 ' + st.dims.bored + ' → 会话内没成（' +
+            (inChat.说 || '') + '），改走 QQ（第 ' + st.idlePingCount + ' 次）：「' + text + '」')
+        } else {
+          diag('待机 ' + Math.round(t.idleMin) + ' 分 / 闷 ' + st.dims.bored + ' → 会话内没成（' +
+            (inChat.说 || '') + '），QQ 也没发成：' + ((r && r.说) || '未知'))
+        }
       }
       saveState(st, cfg)
     }
@@ -492,6 +563,10 @@ export function apply(ctx: any): void {
             })),
             promises: pendingPromises(s),
             diary: { path: DIARY_PATH, markAt: s.markAt, markValue: s.markValue },
+            // 「两条鱼」：还有没有别的同类心情插件在同时跑（2026-11-16 加）
+            conflict: probeConflict(),
+            // 「爱」只出给面板当彩蛋：达成前只给 on=false，达成后才有一句话和那几件记下来的事
+            love: loveState(s, cfg),
           })
         },
       })
@@ -572,6 +647,11 @@ export function apply(ctx: any): void {
         },
       })
       ctx.logger.info('mo-emotion: /mo-emotion/state 就绪 v' + VERSION)
+      // 启动就查一遍同类系统：不报错、不崩溃的冲突最难发现，写进日志让用户能翻到
+      try {
+        const cf = probeConflict()
+        if (cf.alive) ctx.logger.warn('mo-emotion: ' + cf.note)
+      } catch { /* 探测失败不影响主流程 */ }
     })
   } catch (e: any) {
     ctx.logger.warn('mo-emotion: 路由注册失败 ' + (e?.message || String(e)))

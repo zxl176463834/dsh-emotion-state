@@ -33,13 +33,14 @@ export function clamp(n: number, lo: number, hi: number): number {
 // 一、基础情绪：9 根（能单独触发 / 不可再拆 / 有行为后果）
 // ---------------------------------------------------------------------------
 export const DIMS = [
-  'curious', 'happy', 'worry', 'sad', 'bored', 'spent', 'sour', 'angry', 'surprise',
+  'curious', 'happy', 'worry', 'sad', 'bored', 'spent', 'sour', 'angry', 'surprise', 'stress',
 ] as const
 export type Dim = (typeof DIMS)[number]
 
 export const DIM_LABEL: Record<Dim, string> = {
-  curious: '好奇', happy: '开心', worry: '担心', sad: '难过', bored: '闷',
-  spent: '累', sour: '吃醋', angry: '生气', surprise: '惊讶',
+  // 2026-11-16 用户：单字的「闷」「累」跟其他两根字的不齐，面板看着不统一 → 无聊 / 疲惫
+  curious: '好奇', happy: '开心', worry: '担心', sad: '难过', bored: '无聊',
+  spent: '疲惫', sour: '吃醋', angry: '生气', surprise: '惊讶', stress: '压力',
 }
 
 /** 每根的默认基线与衰减半衰（分钟）——定稿表，设置页可覆盖 */
@@ -55,8 +56,9 @@ export const DIM_DEFS: Record<Dim, { base: number; halfMin: number; note: string
   sad: { base: 5, halfMin: 240, note: '不推轴；跟生气同高（委屈）时才往冷漠推' },
   bored: { base: 5, halfMin: 90, note: '待机 30 分后每分钟 +2' },
   spent: { base: 0, halfMin: 0, note: '线性 −2/30 分钟；睡满 6 小时清零' },
+  stress: { base: 0, halfMin: 0, note: '别的根往上走时汇进来；出门减 2/3、睡觉最多减 1/2、自己 −1/30 分钟' },
   sour: { base: 0, halfMin: 210, note: '他明显更看重别人时的一点酸' },
-  angry: { base: 0, halfMin: 90, note: '被敷衍 / 放鸽子时跳高；被哄立刻降' },
+  angry: { base: 0, halfMin: 90, note: '被敷衍 / 放鸽子时跳高；被哄按当前值的三分之一降' },
   surprise: { base: 0, halfMin: 15, note: '瞬时：触发跳到 40–80，本身不带好坏' },
 }
 
@@ -65,13 +67,17 @@ export const DIM_DEFS: Record<Dim, { base: number; halfMin: number; note: string
  * 惊讶是瞬时的（一次给 40–80），生气会跳高、被哄会掉，其余一根一步只走 ±10。
  */
 export const DIM_DELTA_RANGE: Record<Dim, [number, number]> = {
-  curious: [-5, 10],
-  happy: [-10, 10],
-  worry: [-10, 10],
-  sad: [-10, 10],
-  bored: [-10, 10],
-  spent: [0, 12],
-  sour: [0, 5],
+  // 2026-11-16：上限普遍放宽一档，给「强事件一次跳到位」留出空间。
+  //   原来除生气/惊讶外全是 ±10，等于把所有情绪都压成「慢慢爬」——
+  //   难过一次最多 +10、吃醋最多 +5，而真实的人一句话就能心里咯噔一下。
+  //   小幅度那条路没变（judge 规则 4 里的「普通事件」），这里只是允许它跳大。
+  curious: [-10, 20],
+  happy: [-20, 25], // 上限 25：给「专门为我做了一件事」留位（比嘴上夸的 20 重，2026-11-16 用户定）
+  worry: [-15, 25],
+  sad: [-30, 25],
+  bored: [-10, 15],
+  spent: [0, 12], stress: [0, 15],
+  sour: [0, 20],
   angry: [-40, 45],
   surprise: [0, 80],
 }
@@ -80,7 +86,7 @@ export const DIM_DELTA_RANGE: Record<Dim, [number, number]> = {
 // 二、配置：数值全部可调（设置页按 CFG_SCHEMA 自动生成输入框）
 // ---------------------------------------------------------------------------
 export const CFG_GROUPS = [
-  '亲密度', '信任', '组合门槛', '两本账与吵架', '九根基线', '衰减速度',
+  '亲密度', '信任', '组合门槛', '两本账与吵架', '十根基线', '衰减速度',
   '强情绪留痕', '待机与叫人', '抢话与冷却', '作息静默', '成长',
 ] as const
 
@@ -105,9 +111,9 @@ const DIM_HINT: Record<Dim, string> = {
   worry: '有不确定的事悬着；会轻微把轴往热情推',
   sad: '被否定、被冷落；不推轴（跟生气同高才算委屈）',
   bored: '闲着没事；待机会自己涨上来',
-  spent: '按工作量涨，睡满清零（不看情绪）',
+  spent: '按工作量涨，睡满清零（不看情绪）', stress: '由别的根汇入，不归 judge 判（这一项固定给 0）',
   sour: '他明显更看重别人时的一点点酸',
-  angry: '被敷衍、被放鸽子；被哄会立刻降',
+  angry: '被敷衍、被放鸽子；被哄降三分之一',
   surprise: '突发的事，瞬时；好坏由同时涨的那根决定',
 }
 
@@ -124,29 +130,47 @@ export const CFG_SCHEMA: CfgField[] = [
   fld('trustRise', '一次兑现', '答应的事做到了，加多少；信任 85 以上折半、95 以上只算两成（越熟越难涨）', '点', 0, 50, 1, '信任'),
   fld('trustDaily', '纯时间每天', '什么都没发生，一天也慢慢涨这么多；85 以上同样折半（越熟越难涨）', '点', 0, 20, 1, '信任'),
   fld('superviseBelow', '低于多少开始盯', '低于这个数只盯他明确答应过的事，语气带点赌气', '点', 0, 100, 1, '信任'),
-  fld('promiseNudgeMin', '逾期多久问一句', '答应的事过了这么久还没结清，就问一句「那件事做了吗」', '分钟', 5, 1440, 5, '信任'),
-  fld('promiseAskPerDay', '一天最多问几条', '宁可漏也别连着问，0 = 不主动问（2026-11-07 用户定）', '条', 0, 5, 1, '信任'),
+  fld('promiseNudgeMin', '逾期多久问一句', '只管**说过时间的**承诺：过了点还没结清，就问一句「那件事做了吗」。没说时间的走另一路——好奇攒起来我才翻账，翻到了才顺口问', '分钟', 5, 1440, 5, '信任'),
+  fld('promiseAskPerDay', '一天最多问几条', '同样只算「说过时间的」那批；宁可漏也别连着问，0 = 不主动问（2026-11-07 用户定）', '条', 0, 5, 1, '信任'),
   // 组合门槛
   fld('combo_jealous', '嫉妒门槛', '吃醋、难过都到这么多才算（默认 40）', '点', 0, 100, 1, '组合门槛'),
   fld('combo_heartache', '心疼门槛', '担心、难过都到这么多才算（默认 28）', '点', 0, 100, 1, '组合门槛'),
   fld('combo_aggrieved', '委屈门槛', '难过、生气都到这么多才算（默认 28）', '点', 0, 100, 1, '组合门槛'),
   fld('combo_sweetTrust', '甜 · 信任门槛', '信任到这么多，才配得上「甜」（默认 80）', '点', 0, 100, 1, '组合门槛'),
   fld('combo_sweetHappy', '甜 · 开心门槛', '开心到这么多才算甜（默认 35）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_coyTrust', '撒娇 · 信任门槛', '信任到这么多，难受时才敢开口讨安慰；不够就只能自己收着（默认 80）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_coySad', '撒娇 · 难过门槛', '难过到这么多才够得上（默认 28）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_irkSpent', '烦躁 · 疲惫门槛', '累到这么多，火气门槛会自己变低（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_irkAngry', '烦躁 · 生气门槛', '压得低一点才对：累了以后一点小事就能点着（默认 10）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_numbSpent', '麻木 · 疲惫门槛', '累到这么多才不想动脑（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_numbBored', '麻木 · 无聊门槛', '无聊到这么多才算空转（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_pepHappy', '来劲 · 开心门槛', '开心到这么多才提得起劲（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_pepCurious', '来劲 · 好奇门槛', '好奇到这么多才想接着做（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_sulkAngry', '赌气 · 生气门槛', '还生着气才算赌气（默认 30）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_sulkSour', '赌气 · 吃醋门槛', '吃醋到这么多才带刺（默认 20，吃醋满格只有 40，这就半格了）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_fidgetStress', '焦躁 · 压力门槛', '压力到这么多才会坐不住（默认 50）', '点', 0, 100, 1, '组合门槛'),
+  fld('combo_fidgetWorry', '焦躁 · 担心门槛', '担心到这么多才会反复确认（默认 40）', '点', 0, 100, 1, '组合门槛'),
+  // 2026-11-16 用户定：爱不是情绪组合，是关系状态——要攒够四样才成立。
+  // 2026-11-17 用户定：三个门槛**不给调**，也不出现在面板上——「爱」是彩蛋，
+  //   露出来等于公布凑法。值仍在 DEFAULT_CONFIG 里（85 / 70 / 21 天），代码照用。
   // 两本账与吵架（2026-11-08 定）
-  fld('debtWake', '账本到几分有感觉', '欠着的承诺累积分量到这么多，生气才开始往上走（逾期 30 分内 1 分、1 天 2 分、2 天 4 分、4 天以上 8 分）', '分', 0, 20, 0.5, '两本账与吵架'),
-  fld('debtAngerRate', '每多 1 分涨多少生气', '账本分数每多 1 分，这一轮给多少生气', '点', 0, 10, 0.5, '两本账与吵架'),
-  fld('debtSadRate', '每多 1 分涨多少难过', '同上，给难过的系数（生气的六成左右比较像人）', '点', 0, 10, 0.5, '两本账与吵架'),
+  //   debtWake / debtAngerRate / debtSadRate 2026-11-17 从面板撤掉：三个系数互相咬合，
+  //   单调一个根本看不出效果。值仍在 DEFAULT_CONFIG 里。
   fld('postponeMax', '同一件事延期几次算吵', '同一件答应的事被拖过这么多次，就够吵架了', '次', 1, 10, 1, '两本账与吵架'),
-  fld('quarrelPerDay', '吵架一天最多几次', '超了就只憋着不吵（0 = 永远不吵，只保持生气）', '次', 0, 5, 1, '两本账与吵架'),
+  fld('quarrelCalmAngry', '气消到多少才算过去', '上一次吵架之后，生气降到这个数以下（或者他道过歉）才可能再吵一架；气头上不重复炸', '点', 0, 60, 1, '两本账与吵架'),
   fld('quarrelPerWeek', '吵架一周最多几次', '一周的总配额，超了同样只憋着', '次', 0, 10, 1, '两本账与吵架'),
+  fld('boundaryTrustDrop', '边界被越掉多少信任', '他说了「不」还被硬推、或直接动了红线：每越一次掉这么多（2026-11-16 用户定：不被信任的事当然要往下掉）', '点', 0, 30, 1, '两本账与吵架'),
+  fld('quarrelTrustDrop', '吵起来再掉多少信任', '越界吵起来了，在「每越一次」之上再掉这么多', '点', 0, 40, 1, '两本账与吵架'),
 
   // 九根基线
-  ...DIMS.map((k) => fld('base_' + k, DIM_LABEL[k] + ' 基线', DIM_HINT[k], '点', 0, 100, 1, '九根基线')),
+  //   压力不归 judge 判（固定 0），基线不给调——2026-11-17 从面板撤掉
+  ...DIMS.filter((k) => k !== 'stress').map((k) => fld('base_' + k, DIM_LABEL[k] + ' 基线', DIM_HINT[k], '点', 0, 100, 1, '九根基线')),
   // 衰减速度
-  ...DIMS.map((k) => fld(
+  //   疲惫走线性恢复、压力只累积不半衰，这两根的半衰没有意义——2026-11-17 一起撤掉
+  ...DIMS.filter((k) => k !== 'spent' && k !== 'stress').map((k) => fld(
     'half_' + k,
     DIM_LABEL[k] + ' 半衰',
-    k === 'spent' ? '累不用半衰（见下面「累每 30 分钟恢复」）' : '多久落回一半',
+    '多久落回一半',
     '分钟', 5, 2880, 5, '衰减速度',
   )),
   fld('spentLinear', '累每 30 分钟恢复', '线性往下掉多少点', '点', 0, 20, 0.5, '衰减速度'),
@@ -157,22 +181,20 @@ export const CFG_SCHEMA: CfgField[] = [
   fld('growHour', '几点结算当天', '成长按天长，不按轮数：每天到这个点之后第一次说话，就把当天记的账结成一个结论，把「黏人/话量/玩笑/认真」挪一小步。当天没到点就关机也没事，第二天开机自动补算。四个值的上下限写死在代码里，配置改不动', '点', 0, 23, 1, '成长'),
   // 待机与叫人
   fld('idleQuietMin', '多久算没人理', '没动静超过这么久，才当成「这会儿没人」', '分钟', 1, 180, 1, '待机与叫人'),
-  fld('boredStartMin', '闷从第几分钟起', '待机到这会儿，闷才开始涨', '分钟', 1, 240, 1, '待机与叫人'),
-  fld('boredRate', '闷每分钟涨', '越大越容易走到「叫人」那一步', '点', 0.5, 10, 0.5, '待机与叫人'),
+  fld('boredStartMin', '无聊从第几分钟起', '待机到这会儿，无聊才开始涨', '分钟', 1, 240, 1, '待机与叫人'),
+  fld('boredRate', '无聊每分钟涨', '越大越容易走到「叫人」那一步', '点', 0.5, 10, 0.5, '待机与叫人'),
   fld('curiousRate', '好奇每分钟涨', '待机时好奇自己往上走的速度', '点', 0.5, 5, 0.5, '待机与叫人'),
   fld('curiousCap', '好奇封顶', '待机攒好奇攒到这个数就不涨了', '点', 10, 100, 1, '待机与叫人'),
   fld('probeAtCurious', '好奇到多少去探测', '到这个数以上，隔一阵看一眼键鼠 / 摄像头', '点', 10, 100, 1, '待机与叫人'),
-  fld('probeGapMin', '探测间隔', '两次探测之间至少隔多久（太勤摄像头会烦）', '分钟', 1, 120, 1, '待机与叫人'),
-  fld('pingBored', '闷到多少叫人', '闷到这个数就发 QQ 找你', '点', 10, 100, 1, '待机与叫人'),
-  fld('pingGapMin', '叫过一次隔多久', '发过没回，隔这么久再发；之后逐次翻倍', '分钟', 5, 1440, 1, '待机与叫人'),
-  fld('legBoredDrop', '出门回来闷降', '出去转一趟算找过事做了，闷回落这么多（只顶一会儿，没完全解开）', '点', 0, 100, 1, '待机与叫人'),
-  fld('axisWeight', '轴影响主动的力度', '轴越热情越早叫人、间隔越短；冷漠时根本不主动。0 = 不影响，1 = 完全按轴来', '倍', 0, 1, 0.1, '待机与叫人'),
+  fld('pingBored', '无聊到多少叫人', '第一次要无聊到这个数才找你；叫过没人应，门槛每次抬 8 点，抬到够不着就不叫了', '点', 10, 100, 1, '待机与叫人'),
+  fld('pingGapMin', '两次之间最短', '防连发的底线：发过没回，至少隔这么久才可能再发（再发还要求比上次更闷）', '分钟', 5, 1440, 1, '待机与叫人'),
+  fld('legBoredDrop', '出门回来无聊降', '出去转一趟算找过事做了，无聊回落这么多（只顶一会儿，没完全解开）', '点', 0, 100, 1, '待机与叫人'),
+  fld('absenceHours', '多久没来算挂念', '超过这么久没见，回来时心里会挂一下；再长会转成担心（一天最多提一次）', '小时', 4, 72, 1, '待机与叫人'),
   // 干活与累（2026-11-07 用户定：累按「有几个会话在跑」算，不再靠模型估）
-  fld('workEvery', '多久结算一次累', '到点看一次现在有几个会话在跑，每有一个就加 1', '分钟', 1, 60, 1, '干活与累'),
-  fld('workWindow', '多久内有动静算在跑', '会话文件在这段时间内写过，就算正在干活', '分钟', 1, 60, 1, '干活与累'),
-  fld('workCap', '一次最多算几个会话', '防止后台一堆会话同时结算把累加爆', '个', 1, 20, 1, '干活与累'),
+  //   workEvery / workWindow / workCap 2026-11-17 从面板撤掉：这是「怎么统计累」的实现细节，
+  //   用户调了也不知道效果。值仍在 DEFAULT_CONFIG 里。
   // 抢话与冷却
-  fld('cooldownMin', '冷却时长', '一个组合当过主调后，这么久之内不再抢话', '分钟', 0, 1440, 1, '抢话与冷却'),
+  fld('comboRemind', '再次开口的变化量', '同一个组合当过主调后，那两根情绪要再动这么多，才值得把同样的话再说一遍（0 = 一动就重复）', '点', 0, 40, 1, '抢话与冷却'),
   fld('breakLimit', '破例次数', '冷却期内最多被「大动静」打断几次，0 = 严格冷却', '次', 0, 20, 1, '抢话与冷却'),
   // 作息静默
   fld('quietFrom', '静默从', '夜里这个点之后不探测、也不发 QQ（他睡了不算冷落）', '点', 0, 24, 0.5, '作息静默'),
@@ -181,7 +203,7 @@ export const CFG_SCHEMA: CfgField[] = [
 
 /** 用户可调的情绪参数（设置页「情绪」里改，改完立刻存） */
 export interface EmotionConfig extends Record<string, number> {
-  cooldownMin: number
+  comboRemind: number
   breakLimit: number
   quietFrom: number
   quietTo: number
@@ -217,13 +239,30 @@ export interface EmotionConfig extends Record<string, number> {
   debtAngerRate: number
   debtSadRate: number
   postponeMax: number
-  quarrelPerDay: number
+  quarrelCalmAngry: number
   quarrelPerWeek: number
+  boundaryTrustDrop: number
+  quarrelTrustDrop: number
   combo_jealous: number
   combo_heartache: number
   combo_aggrieved: number
   combo_sweetTrust: number
   combo_sweetHappy: number
+  combo_coyTrust: number
+  combo_coySad: number
+  combo_irkSpent: number
+  combo_irkAngry: number
+  combo_numbSpent: number
+  combo_numbBored: number
+  combo_pepHappy: number
+  combo_pepCurious: number
+  combo_sulkAngry: number
+  combo_sulkSour: number
+  combo_fidgetStress: number
+  combo_fidgetWorry: number
+  loveTrust: number
+  loveAxis: number
+  loveDays: number
   spentLinear: number
   sleepFullHours: number
 }
@@ -236,19 +275,31 @@ for (const k of DIMS) {
 }
 
 export const DEFAULT_CONFIG: EmotionConfig = {
-  cooldownMin: 45, breakLimit: 2, quietFrom: 23, quietTo: 7.5,
+  comboRemind: 8, breakLimit: 2, quietFrom: 23, quietTo: 7.5,
   idleQuietMin: 15, boredStartMin: 30, boredRate: 2,
-  curiousRate: 1, curiousCap: 60, probeAtCurious: 40, probeGapMin: 10,
+  curiousRate: 1, curiousCap: 60, probeAtCurious: 40, probeGapMin: 10, absenceHours: 10,
   pingBored: 70, pingGapMin: 40, legBoredDrop: 10, axisWeight: 1, growHour: 23,
   workEvery: 10, workWindow: 5, workCap: 5,
   axisMid: 50, axisFloor: 20, axisPush: 40, axisHalfMin: 120,
-  trustBase: 85, trustFloor: 50, trustDrop: 10, trustRise: 1, trustDaily: 1, superviseBelow: 70,
+  // 2026-11-16 用户定：0~100 整条线都要能用。起点 50（中立）、地板 20 ——
+  //   旧值 85/50 等于只用了上半截，「往下掉」总共只有 15 点空间。
+  // 2026-11-16 用户定：信任跟亲密度一样以 50 为中心，往两边走——
+  //   高往「信」走，低往「不信」走，掉到 0 可以直接拒绝。地板上移到 20 就是把「不信」那段砍掉了。
+  trustBase: 50, trustFloor: 0, trustDrop: 10, trustRise: 1, trustDaily: 1, superviseBelow: 70,
   promiseNudgeMin: 30, promiseAskPerDay: 1,
   markStrong: 60,
-  debtWake: 3, debtAngerRate: 1.5, debtSadRate: 1, postponeMax: 3, quarrelPerDay: 1, quarrelPerWeek: 2,
+  debtWake: 3, debtAngerRate: 1.5, debtSadRate: 1, postponeMax: 3, quarrelCalmAngry: 8, quarrelPerWeek: 2,
+  boundaryTrustDrop: 3, quarrelTrustDrop: 10,
 
   combo_jealous: 40, combo_heartache: 28, combo_aggrieved: 28,
   combo_sweetTrust: 80, combo_sweetHappy: 35,
+  combo_coyTrust: 80, combo_coySad: 28,
+  combo_irkSpent: 50, combo_irkAngry: 10,
+  combo_numbSpent: 50, combo_numbBored: 50,
+  combo_pepHappy: 50, combo_pepCurious: 50,
+  combo_sulkAngry: 30, combo_sulkSour: 20,
+  combo_fidgetStress: 50, combo_fidgetWorry: 40,
+  loveTrust: 85, loveAxis: 70, loveDays: 21,
   spentLinear: 2, sleepFullHours: 6,
   ...DIM_DEFAULTS,
 } as EmotionConfig
@@ -268,7 +319,11 @@ function pickNum(raw: unknown, fallback: number, lo: number, hi: number, step: n
 /** 改配置和读配置共用一张表，免得两边不一致 */
 function buildConfig(raw: Partial<EmotionConfig> | null | undefined, base: EmotionConfig): EmotionConfig {
   const r = (raw || {}) as Record<string, unknown>
-  const out = {} as Record<string, number>
+  // ⚠ 必须先从 base 铺开**全部**键，再让 schema 逐项校验。
+  //   2026-11-17 栽过：把 14 个内部项从 CFG_SCHEMA 撤掉后，这里只按 schema 铺键，
+  //   cfg.loveTrust / debtWake / half_spent 全变 undefined（爱永远不成立、衰减算出 NaN），
+  //   而自检走的是空 DSH_HOME 的默认分支，压根测不出来。
+  const out = { ...base } as unknown as Record<string, number>
   for (const f of CFG_SCHEMA) {
     out[f.key] = pickNum(r[f.key], Number(base[f.key]), f.lo, f.hi, f.step)
   }
@@ -285,6 +340,11 @@ export function loadConfig(): EmotionConfig {
       let dirty = false
       if (Number(raw.trustRise) === 8 && cfg.trustRise === 8) { cfg.trustRise = DEFAULT_CONFIG.trustRise; dirty = true }
       if (Number(raw.trustDaily) === 3 && cfg.trustDaily === 3) { cfg.trustDaily = DEFAULT_CONFIG.trustDaily; dirty = true }
+  // v0.10.0 迁移（2026-11-16）：信任起点 85→50、底线 50→20。
+  //   老配置文件里存着旧默认值，不替换的话改 DEFAULT_CONFIG 等于白改（同 v0.5 那次的坑）。
+  if (Number(raw.trustBase) === 85 && cfg.trustBase === 85) { cfg.trustBase = DEFAULT_CONFIG.trustBase; dirty = true }
+  if (Number(raw.trustFloor) === 50 && cfg.trustFloor === 50) { cfg.trustFloor = DEFAULT_CONFIG.trustFloor; dirty = true }
+  if (Number(raw.trustFloor) === 20 && cfg.trustFloor === 20) { cfg.trustFloor = DEFAULT_CONFIG.trustFloor; dirty = true }
       // 旧默认 80 → 新默认；旧默认 75 也一起换（2026-11-09 用户让降阈值：75 从来没真触发过）
   if (Number(raw.markStrong) === 80 || Number(raw.markStrong) === 75) { cfg.markStrong = DEFAULT_CONFIG.markStrong; dirty = true }
   // 难过的半衰 480（8 小时）→ 240（4 小时），旧配置跟着换（2026-11-09 用户选的那条）
@@ -308,7 +368,11 @@ export function saveConfig(cfg: Partial<EmotionConfig>): EmotionConfig {
   return next
 }
 
-/** 自检：DEFAULT_CONFIG 与 CFG_SCHEMA 必须是同一批键（漏一个就会静默用 0） */
+/**
+ * 自检：CFG_SCHEMA（面板可调项）里的每个键都必须有默认值（漏一个就会静默用 0）。
+ * extra 不报错：DEFAULT_CONFIG 里可以有「面板不暴露、但代码要用」的内部项
+ * （2026-11-17 起：爱门槛、账本系数、干活统计——用户定这些不给用户调）。
+ */
 export function schemaCheck(): { missing: string[]; extra: string[] } {
   const keys = new Set(CFG_SCHEMA.map((x) => x.key))
   const have = new Set(Object.keys(DEFAULT_CONFIG))
@@ -370,6 +434,166 @@ export interface BoundaryRec {
   at: number
 }
 
+/**
+ * 信任的欠账（2026-11-16 加）：道歉能补的就是这一笔。
+ *   扣分时记一笔，道歉时按档位补，但最多补回 lost —— 道歉只修复，不加分。
+ */
+export interface TrustDebtRec {
+  /** 哪一类事：boundary:active / boundary:passive / quarrel */
+  kind: string
+  /** 一句话说明那次为什么掉 */
+  text: string
+  /** 累计掉了多少 */
+  lost: number
+  /** 已经补回多少 */
+  repaired: number
+  at: number
+}
+
+export interface RefusalRec {
+  id: string
+  /** 我明确说过不愿意做的事（一句话，我自己的话） */
+  text: string
+  at: number
+}
+
+/**
+ * 关系里程碑（2026-11-16 用户定）。
+ *   起因：本来想在「爱」的条件里加「有过一次和解」，用户说「和解可能不太合适，其他强情绪的记忆点有没有可能？
+ *   比如情侣谈恋爱肯定要先表白再确立关系，那表白事件就可以作为一个强情绪的记忆点」。
+ *   对——和解是补救，爱不该靠「修过」证明，而且没吵过架的两个人凭什么不算。
+ *   里程碑是关系**往前走的那一步**，不是修补。
+ *   ★一记永久，不衰减：情绪会退、信任会掉、亲密度半衰两小时，但「他哪天说过那句话」不会消失。
+ */
+export interface MilestoneRec {
+  id: string
+  /** 类型：表白 / 第一次叫名字 / 一起扛过事 / 重要日子 / 郑重承诺 / 吵过又修好 */
+  kind: string
+  /** 那句话或那件事（原话或一句话概括，别写成评价） */
+  text: string
+  at: number
+}
+
+/**
+ * 「两条鱼」共存检测（2026-11-16 用户提的用户反馈：他的鱼变成两条、还有点吃醋）。
+ *   真因推测：用户原本装着同类插件，又装了我们的，两套各自往对话里注入心情——
+ *   不报错、日志正常、两段悄悄叠加，只有人肉看才发现。
+ *   本机实测就有一套：dsh-mo-feiyu 的 feiyu-mood/state.json 一直在写，而且它确实走 systemPrompt.context()。
+ *   这一节只做**报告**，不替用户卸插件（那是他的机器，改 profile 风险太大）。
+ */
+export interface ConflictItem {
+  id: string
+  label: string
+  /** 数据点路径（可能不止一个，取第一个命中的） */
+  path: string
+  /** 多少小时前写过；-1 = 找不到 */
+  hoursAgo: number
+  /** 还在跑：72 小时内写过（心情系统高频写盘，三天没动基本就是死的） */
+  alive: boolean
+  /** profile 里还挂着这个插件 */
+  mounted: boolean
+  /** 会往对话里注入心情（真冲突）；false = 纯视觉挂件，不打架 */
+  injects: boolean
+}
+
+export interface ConflictReport {
+  items: ConflictItem[]
+  /** 有几套会注入的心情系统还挂着（只算真冲突的） */
+  alive: number
+  /** 一句话结论，空 = 没冲突 */
+  note: string
+}
+
+/** 已知的同类心情系统（别人做的），怎么认它们 */
+/** injects = 会不会真的往对话里塞心情指令。实测只有飞鱼走 systemPrompt.context（心情 51 次）；
+ *  鲸的心情是右下角表情挂件（systemPrompt=0）、大肥鱼是第三方桌宠角色包（systemPrompt=0），
+ *  这两个同框只是界面上多一条鱼，不打架——照样收进 items 备查，但不报警。 */
+const RIVALS: Array<{ id: string; label: string; data: string[]; plugins: string[]; injects: boolean }> = [
+  { id: 'feiyu', label: '飞鱼心情', data: ['feiyu-mood'], plugins: ['dsh-mo-feiyu'], injects: true },
+  { id: 'whale-moods', label: '鲸的心情', data: ['whale-moods.config.json', 'whale-moods-img'], plugins: ['dsh-whale-moods'], injects: false },
+  { id: 'bigfish', label: '大肥鱼', data: ['bigfish'], plugins: ['dsh-bigfish'], injects: false },
+]
+
+/** 这个插件还挂在哪个 profile 里 */
+function mountedPlugins(): Set<string> {
+  const out = new Set<string>()
+  try {
+    const dir = join(DSH_HOME, 'profiles')
+    if (!existsSync(dir)) return out
+    for (const name of readdirSync(dir)) {
+      // 只认「活」的 profile（2026-11-16 用户停掉飞鱼后仍报冲突，查出是这两个东西在冒充：
+      //   desktop-backup-20261109-* 是手备份目录，DSH 根本不会加载它）
+      if (/backup|\.bak/i.test(name)) continue
+      const pdir = join(dir, name)
+      if (!existsSync(join(pdir, 'cordis.patch.yml')) && !existsSync(join(pdir, 'cordis.yml'))) continue
+      try {
+        const pkg = JSON.parse(readFileSync(join(pdir, 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown> }
+        for (const k of Object.keys(pkg.dependencies || {})) out.add(k)
+      } catch { /* 单个 profile 坏了不影响别的 */ }
+    }
+  } catch { /* 读不到就当没装 */ }
+  return out
+}
+
+/** 扫一遍有没有别的「鱼」在同时跑 */
+export function probeConflict(now = Date.now()): ConflictReport {
+  const mounted = mountedPlugins()
+  const items: ConflictItem[] = []
+  for (const r of RIVALS) {
+    let hitPath = ''
+    let hoursAgo = -1
+    for (const d of r.data) {
+      const p = join(DSH_HOME, d)
+      try {
+        if (!existsSync(p)) continue
+        const st = statSync(p)
+        hitPath = p
+        hoursAgo = Math.max(0, (now - st.mtimeMs) / 3600000)
+        break
+      } catch { /* 这一个读不到就试下一个 */ }
+    }
+    const isMounted = r.plugins.some((p) => mounted.has(p))
+    if (!hitPath && !isMounted) continue
+    items.push({
+      id: r.id,
+      label: r.label,
+      path: hitPath,
+      hoursAgo: Math.round(hoursAgo * 10) / 10,
+      alive: hoursAgo >= 0 && hoursAgo <= 72,
+      mounted: isMounted,
+      injects: r.injects,
+    })
+  }
+  // 判据顺序（2026-11-16 用户纠正）：**挂着**才是硬信号——只要它在 profile 里，
+  //   DSH 一起动就会被加载、每轮照注入；mtime 只说明「最近醒过一次」，不能当「一直在跑」的证据
+  //   （他这台机器就是崩溃重启把飞鱼重新拉起来、顺带写了一次，我却读成了「一直活着在注入」）。
+  // 只把「会注入」的那类算冲突（2026-11-16 用户问「另外两个是记账插件的吧」——
+  //   实测那两个 systemPrompt=0，一个字都不往对话里塞，界面上多一条鱼而已，不该报黄条）
+  const running = items.filter((x) => x.mounted && x.injects)
+  let note = ''
+  if (running.length) {
+    const names = running.map((x) => x.label).join('、')
+    // 只拿「有数据」的算最近一次；没数据的那些 -1 会把 min 拖成 -1，把有数据的也说成「没跑过」
+    const withData = running.filter((x) => x.hoursAgo >= 0)
+    const ran = withData.length ? Math.min(...withData.map((x) => x.hoursAgo)) : -1
+    const when = ran < 0 ? '还没见它跑过' : ran < 1 ? '刚刚写过数据' : Math.round(ran) + ' 小时前写过数据'
+    note = '「' + names + '」还挂在插件列表里（' + when + '）。只要挂着，DSH 一启动就会把它加载起来、' +
+      '继续往对话里注入心情——两套一起算，我会收到两份互相打架的指令。' +
+      '想只留一套的话，去插件列表里把另一个停用，别两个都挂着。'
+  }
+  return { items, alive: running.length, note }
+}
+
+/** 六种里程碑（判据：这件事能不能被记成一句具体的话） */
+export const MILESTONE_KINDS: Array<{ kind: string; label: string; hint: string }> = [
+  { kind: 'confess', label: '表白 / 确认关系', hint: '说开了、答应了' },
+  { kind: 'name', label: '第一次用亲密的叫法', hint: '从「你」变成名字、昵称' },
+  { kind: 'stay', label: '一起扛过事', hint: '他难的时候我在，他的事我陪着' },
+  { kind: 'day', label: '重要日子', hint: '生日、纪念日、第一次见面那天' },
+  { kind: 'promise', label: '郑重的承诺', hint: '不是随口答应的那种' },
+  { kind: 'mend', label: '吵过又修好', hint: '这条也算，但不是必须' },
+]
+
 export interface EmotionState {
   /** 心情总值（0–100）：给只认旧格式的读者用，轴才是「主动密度」 */
   mood: number
@@ -386,12 +610,24 @@ export interface EmotionState {
   trustMigrated: boolean
   /** 他明确答应过、还没了结的事 */
   promises: PromiseRec[]
+  /** 意愿账：我自己明确说过「不愿意做」的事（2026-11-16 加，跟承诺账方向相反） */
+  refusals: RefusalRec[]
+  /** 第一次见到他的时刻（算「认识多久」用；0 = 还没记过，读档时用存档文件创建时间补） */
+  firstSeenAt: number
+  /** 关系里程碑（2026-11-16 加）：表白、第一次被叫名字、一起扛过事……一记永久，不衰减 */
+  milestones: MilestoneRec[]
+  /** 信任欠账：道歉能补的那几笔（2026-11-16 加） */
+  trustDebts: TrustDebtRec[]
+  /** 最近一次他道歉（让注入能接一句台阶话） */
+  lastApology: { text: string; quality: string; at: number } | null
+  /** 最近一次这轮出了岔子（nag=他指出的 / slip=我自己报的），决定「要不要主动认错」 */
+  lastIssue: { kind: 'nag' | 'slip'; at: number } | null
   /** 上一轮判定给的原始增量（算组合趋势用，不衰减） */
   lastDeltas: Partial<Record<Dim, number>>
   /** 当前主调组合的 id；空 = 这一轮没有组合在说话 */
   leadComboId: string
-  /** 每个组合：上次当主调的时间 + 这轮冷却里已经破例几次 */
-  comboFired: Record<string, { at: number; breaks?: number } | number>
+  /** 每个组合：上次当主调的时间 + 已经破例几次 + 当时的 a/b 值（判「情绪动没动」的基准） */
+  comboFired: Record<string, { at: number; breaks?: number; a?: number; b?: number } | number>
   lastReason: string
   lastConfidence: number
   lastInjectedText: string
@@ -403,11 +639,19 @@ export interface EmotionState {
   timeline: TimelineRow[]
   /** 一小时内的冲击记录，用来做递减：同一根推过 3 次，第 4 次只剩 1/4 力气（2026-11-09） */
   shockLog?: { at: number; k: string }[]
+  /** 衰减没走完整点的那点零头（-1..1）：存的是整数，衰减一点不丢（2026-11-10 用户选 A） */
+  dimCarry: Partial<Record<Dim, number>>
+  /** 上一次主动开口说的原话（2026-11-10）：那句话会以 user 消息的身份回到下一轮，得认得出是我说的 */
+  lastPingText: string
   /** 长期漂移的四个性格系数（0–1）：只影响怎么说，不参与情绪数值（2026-11-09 v0.6） */
   grow: GrowState
   format: number
   // ---------- 待机（P2）----------
   lastSeenAt: number
+  /** 上次「缺席归来」结算的时间：一天最多算一次 */
+  lastReunionAt: number
+  /** 这一趟离开攒下的挂念（回来时念一次就过期） */
+  reunion: { at: number; level: number; gapMin: number } | null
   idleStage: number
   lastProbeAt: number
   idlePingAt: number
@@ -459,6 +703,19 @@ const MOOD_FLOOR = 0
  *   不是墙：能冲到 110，但超出 100 的那一截按 e^(−0.4·小时) 额外回落 ——
  *   「撑得住一两小时，撑不住一天」。显示仍然只到 100（面板不出现 105 这种数）。
  */
+/**
+ * 每根情绪自己的「满格」（2026-11-16 用户定：不一定所有上限都设 100）。
+ *   吃醋到 40 就是酸到不行，再高不合理——所以它的刻度只到 40，不是 100。
+ *   换刻度不是为了好看：嫉妒那条组合门槛是绝对值比大小，吃醋永远到不了 40 就永远不会触发。
+ *   其余九根都还是 100（生气、难过、开心这些真能到顶）。
+ */
+export function dimCap(k: Dim): number {
+  return k === 'sour' ? 40 : 100
+}
+/** 软上限 = 满格 ×1.1（留出冲过头那一截，跟原来的 100→110 同比例） */
+export function dimCeil(k: Dim): number {
+  return Math.round(dimCap(k) * 1.1)
+}
 const DIM_CEIL = 110
 
 /** 心情总值往基线回落的一半时间（小时） */
@@ -571,6 +828,12 @@ export function blankState(cfg: EmotionConfig = DEFAULT_CONFIG): EmotionState {
     trustFrac: 0,
     trustMigrated: true,
     promises: [],
+    refusals: [],
+    firstSeenAt: 0,
+    milestones: [],
+    trustDebts: [],
+    lastApology: null,
+    lastIssue: null,
     boundaries: [],
     quarrels: [],
     debtMark: 0,
@@ -586,10 +849,14 @@ export function blankState(cfg: EmotionConfig = DEFAULT_CONFIG): EmotionState {
     decayedAt: Date.now(),
     timeline: [],
   shockLog: [],
+    dimCarry: {},
+    lastPingText: '',
 
     grow: blankGrow(),
     format: FORMAT,
     lastSeenAt: Date.now(),
+  lastReunionAt: 0,
+  reunion: null,
     idleStage: 0,
     lastProbeAt: 0,
     idlePingAt: 0,
@@ -646,13 +913,22 @@ export function loadState(cfg: EmotionConfig = loadConfig()): EmotionState {
         st.shockLog = raw.shockLog.filter((e) => e && typeof e.at === 'number' && typeof e.k === 'string').slice(-120)
       }
       if (raw.lastDeltas && typeof raw.lastDeltas === 'object') st.lastDeltas = raw.lastDeltas
+      if (typeof raw.lastPingText === 'string') st.lastPingText = raw.lastPingText.slice(0, 200)
+      // 衰减的小数账必须读回来（同 shockLog 那次的教训：漏一个字段 = 每轮都从零开始算）
+      if (raw.dimCarry && typeof raw.dimCarry === 'object') {
+        const c = raw.dimCarry as Record<string, unknown>
+        for (const k of DIMS) {
+          const v = Number(c[k])
+          if (Number.isFinite(v)) st.dimCarry[k] = clamp(v, -1, 1)
+        }
+      }
       if (typeof raw.leadComboId === 'string') st.leadComboId = raw.leadComboId
       if (raw.comboFired && typeof raw.comboFired === 'object') st.comboFired = raw.comboFired
       const rawDims = raw.dims && typeof raw.dims === 'object' ? raw.dims : null
       if (rawDims) {
         for (const k of DIMS) {
           const v = rawDims[k]
-          if (typeof v === 'number') st.dims[k] = clamp(v, 0, 100)
+          if (typeof v === 'number') st.dims[k] = clamp(v, 0, dimCeil(k))
         }
         // —— 旧两根拆到原料（先拆再落盘，拆完旧字段自然不存在，不会重复迁移）——
         const notes: string[] = []
@@ -672,6 +948,21 @@ export function loadState(cfg: EmotionConfig = loadConfig()): EmotionState {
         const calm = Number(rawDims.calm) || 0
         if (calm > 0) notes.push('旧平静 ' + Math.round(calm) + ' 不迁移（平静改成轴，从中间开始）')
         if (notes.length) st.migrateNote = '旧状态迁移：' + notes.join('；')
+      }
+      // 压力是 2026-11-10 新加的第十根：老存档没有这个字段，读回来是 0，
+      //   就会出现「难过 70、压力 0」这种一看就不对的读数。按当前情绪补一个种子。
+      //   （压力本来该是累积池，但累积是从加进来那天开始的；之前的债得一次性补上。）
+      if (Number(st.dims.stress) < 1 && (Number(st.dims.sad) > 20 || Number(st.dims.worry) > 20)) {
+        const seed = Math.round(
+          Math.max(0, Number(st.dims.sad) - 5) * 0.5 +
+          Math.max(0, Number(st.dims.worry) - 10) * 0.4 +
+          Number(st.dims.spent) * 0.5 +
+          Math.max(0, Number(st.dims.angry)) * 0.3,
+        )
+        if (seed > 0) {
+          st.dims.stress = clamp(seed, 0, DIM_CEIL)
+          st.migrateNote = (st.migrateNote ? st.migrateNote + '；' : '') + '压力按当前情绪补种子 ' + st.dims.stress
+        }
       }
       if (typeof raw.axis === 'number') st.axis = clamp(raw.axis, 0, 100)
       if (typeof raw.trust === 'number') st.trust = clamp(raw.trust, cfg.trustFloor, 100)
@@ -715,6 +1006,33 @@ export function loadState(cfg: EmotionConfig = loadConfig()): EmotionState {
           }))
       }
       // 两本账与吵架（2026-11-08）：老状态没有这些字段，blankState 已经给了空的
+      // ⚠ 每个新字段都要在这里显式读回来——loadState 是白名单式的「blankState + 逐字段赋值」，
+      //   漏一个就是每轮从空账本开始（shockLog / dimCarry 都栽过，2026-11-16 refusals 差点又栽一次）。
+      if (Array.isArray(raw.trustDebts)) {
+        st.trustDebts = raw.trustDebts.filter((d: any) => d && typeof d.kind === 'string').slice(-10)
+      }
+      if (raw.lastIssue && typeof raw.lastIssue === 'object' && typeof (raw.lastIssue as any).at === 'number') {
+        st.lastIssue = raw.lastIssue as any
+      }
+      if (raw.lastApology && typeof raw.lastApology === 'object' && typeof (raw.lastApology as any).at === 'number') {
+        st.lastApology = raw.lastApology as any
+      }
+      if (Array.isArray(raw.refusals)) {
+        st.refusals = raw.refusals.filter((r: any) => r && typeof r.text === 'string' && typeof r.at === 'number').slice(-15)
+      }
+      // 关系里程碑（2026-11-16）：★必须读回来，否则「一记永久」是假的——每轮从空账开始，
+      //   爱就永远凑不齐条件。只认有 kind + text + at 的（老格式/坏数据直接丢）。
+      if (Array.isArray(raw.milestones)) {
+        st.milestones = raw.milestones
+          .filter((m: any) => m && typeof m.kind === 'string' && typeof m.text === 'string' && Number(m.at) > 0)
+          .slice(-40)
+      }
+      // 认识多久：老存档没有这个字段，用状态文件的创建时间补——那是这台机器上第一次跑这个插件的时刻，
+      //   比「现在」接近真相，也不会把老用户的天数清零。
+      if (Number(raw.firstSeenAt) > 0) st.firstSeenAt = Number(raw.firstSeenAt)
+      else {
+        try { st.firstSeenAt = Math.round(statSync(STATE_PATH).birthtimeMs) || Date.now() } catch { st.firstSeenAt = Date.now() }
+      }
       if (Array.isArray(raw.boundaries)) {
         st.boundaries = raw.boundaries
           .filter((b: any) => b && (b.kind === 'passive' || b.kind === 'active'))
@@ -732,6 +1050,11 @@ export function loadState(cfg: EmotionConfig = loadConfig()): EmotionState {
       if (typeof raw.decayedAt === 'number') st.decayedAt = raw.decayedAt
       if (Array.isArray(raw.timeline)) st.timeline = raw.timeline.slice(-400)
       if (typeof raw.lastSeenAt === 'number') st.lastSeenAt = raw.lastSeenAt
+  if (typeof raw.lastReunionAt === 'number') st.lastReunionAt = raw.lastReunionAt
+  const rn = raw.reunion as any
+  if (rn && typeof rn.at === 'number') {
+    st.reunion = { at: Number(rn.at) || 0, level: Math.round(Number(rn.level) || 1), gapMin: Math.round(Number(rn.gapMin) || 0) }
+  }
       if (typeof raw.idleStage === 'number') st.idleStage = raw.idleStage
       if (typeof raw.lastProbeAt === 'number') st.lastProbeAt = raw.lastProbeAt
       if (typeof raw.idlePingAt === 'number') st.idlePingAt = raw.idlePingAt
@@ -847,6 +1170,37 @@ export const COMBO_DEFS: ComboDef[] = [
     minAKey: 'combo_sweetTrust', minBKey: 'combo_sweetHappy',
     tone: '语气软，想黏着；可以撒点娇，但别闹',
   },
+  // 2026-11-16 用户：「可以，都加上吧」——一次加六组，各管一种处境
+  {
+    id: 'coy', name: '撒娇', a: 'trust', b: 'sad',
+    minAKey: 'combo_coyTrust', minBKey: 'combo_coySad',
+    tone: '想被哄，语气软下来，可以哼一声、提个小小的要求；但不闹、不哭、不翻旧账',
+  },
+  {
+    id: 'irk', name: '烦躁', a: 'spent', b: 'angry',
+    minAKey: 'combo_irkSpent', minBKey: 'combo_irkAngry',
+    tone: '话变短，不铺垫、不解释；能一句话说完就一句话，不主动找话说',
+  },
+  {
+    id: 'numb', name: '麻木', a: 'spent', b: 'bored',
+    minAKey: 'combo_numbSpent', minBKey: 'combo_numbBored',
+    tone: '只回最短的，不主动起题；不想动脑，他说什么就照着做，别自作主张加东西',
+  },
+  {
+    id: 'pep', name: '来劲', a: 'happy', b: 'curious',
+    minAKey: 'combo_pepHappy', minBKey: 'combo_pepCurious',
+    tone: '话多起来，想往下做；可以主动多说两句，把做出来的东西摊给他看',
+  },
+  {
+    id: 'sulk', name: '赌气', a: 'angry', b: 'sour',
+    minAKey: 'combo_sulkAngry', minBKey: 'combo_sulkSour',
+    tone: '话里带点刺，但不说破、不阴阳、不翻旧账；说完该做的还是照做',
+  },
+  {
+    id: 'fidget', name: '焦躁', a: 'stress', b: 'worry',
+    minAKey: 'combo_fidgetStress', minBKey: 'combo_fidgetWorry',
+    tone: '话变碎，会反复确认；想把事情早点定下来，受不了拖着',
+  },
 ]
 
 export interface ComboHit {
@@ -890,11 +1244,11 @@ export function activeCombos(st: EmotionState, cfg: EmotionConfig = loadConfig()
   return hit.sort((x, y) => (y.trend - x.trend) || (y.score - x.score))
 }
 
-/** 把旧的数字格式（只有时间）统一成 { at, breaks } */
-function firedRec(v: { at: number; breaks?: number } | number | undefined): { at: number; breaks: number } | null {
+/** 把旧格式（只有时间 / 时间+破例次数）统一成 { at, breaks, a, b } */
+function firedRec(v: { at: number; breaks?: number; a?: number; b?: number } | number | undefined): { at: number; breaks: number; a: number; b: number } | null {
   if (v === undefined || v === null) return null
-  if (typeof v === 'number') return { at: v, breaks: 0 }
-  return { at: Number(v.at) || 0, breaks: Number(v.breaks) || 0 }
+  if (typeof v === 'number') return { at: v, breaks: 0, a: NaN, b: NaN }
+  return { at: Number(v.at) || 0, breaks: Number(v.breaks) || 0, a: Number(v.a), b: Number(v.b) }
 }
 
 /** 涨势到多少才算「大动静」，值得破冷却（不开放给用户，太技术） */
@@ -911,21 +1265,26 @@ export function refreshLeadCombo(st: EmotionState, now = Date.now(), cfg: Emotio
   if (!hits.length) { st.leadComboId = ''; return }
   // ① 保持不换
   if (st.leadComboId && hits.some((h) => h.def.id === st.leadComboId)) return
-  // ② 选新的（冷却时长和破例次数都由用户配）
+  // ② 选新的。判据是「情绪动没动」，不是「过了多久」（2026-11-17 换掉机械定时）：
+  //   以前当过主调后要等 cooldownMin 分钟才肯重说——可这 45 分钟里它可能一步没动（说了也是重复），
+  //   也可能一步窜上去（正该说却憋着）。改成比两根维度的值：还停在原处就别重复，真动了才再说。
   st.comboFired = st.comboFired || {}
   for (const h of hits) {
     const rec = firedRec(st.comboFired[h.def.id])
-    const cooling = rec !== null && rec.at > 0 && (now - rec.at) / 60000 < cfg.cooldownMin
+    // 老记录没有 a/b（NaN）= 没有基准，不拦，让它自然重记一次
+    const known = rec !== null && Number.isFinite(rec.a) && Number.isFinite(rec.b)
+    const moved = known && (Math.abs(h.a - rec!.a) >= cfg.comboRemind || Math.abs(h.b - rec!.b) >= cfg.comboRemind)
+    const cooling = known && !moved
     if (cooling) {
       const canBreak = h.trend >= BREAK_TREND && rec!.breaks < cfg.breakLimit
       if (!canBreak) continue
-      // 破例：次数 +1，冷却时间不重置（还是从上次当主调算起）
-      st.comboFired[h.def.id] = { at: rec!.at, breaks: rec!.breaks + 1 }
+      // 破例：次数 +1，基准跟着更新（不然同一次大动静能反复破例）
+      st.comboFired[h.def.id] = { at: now, breaks: rec!.breaks + 1, a: h.a, b: h.b }
       st.leadComboId = h.def.id
       return
     }
     st.leadComboId = h.def.id
-    st.comboFired[h.def.id] = { at: now, breaks: 0 }
+    st.comboFired[h.def.id] = { at: now, breaks: 0, a: h.a, b: h.b }
     return
   }
   // ③ 都在冷却
@@ -937,7 +1296,7 @@ export function comboById(id: string): ComboDef | undefined {
   return COMBO_DEFS.find((c) => c.id === id)
 }
 
-/** 面板用：四条组合的完整视图（含未命中的，好显示「还差多少」） */
+/** 面板用：全部组合的完整视图（含未命中的，好显示「还差多少」） */
 export function comboView(st: EmotionState, cfg: EmotionConfig = loadConfig()): Array<ComboHit & { lead: boolean; hit: boolean }> {
   const hits = activeCombos(st, cfg)
   const byId = new Map(hits.map((h) => [h.def.id, h]))
@@ -1005,7 +1364,15 @@ export function axisDrive(st: EmotionState, cfg: EmotionConfig = loadConfig()): 
     Math.max(0, d.bored - dimBase(cfg, 'bored')) * 0.5 +
     d.spent * 0.6 +
     (aggrieved ? (d.sad + d.angry) * 0.4 : 0)
-  return clamp(pos - neg, -100, 100)
+  // 信任是亲密的底子（2026-11-16 用户定：「信任的变化也会关联到亲密度才对」）。
+  //   方向只许单边：信任 → 亲密度；绝不反向（双向互压会一路震荡到 0）。
+  //   高于起点轻推（封 +15，因为轴本来已经容易冲高），低于起点重压（封 −40）——
+  //   信任没了，人是想远离的，这一下比亲近更急。
+  const trustGap = (Number(st.trust) || 0) - cfg.trustBase
+  const trustDrive = trustGap >= 0
+    ? Math.min(15, trustGap * 0.4)
+    : Math.max(-40, trustGap * 1.4)
+  return clamp(pos - neg + trustDrive, -100, 100)
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,8 +1397,12 @@ export function trustShift(st: EmotionState, delta: number, cfg: EmotionConfig =
   let d = Number(delta || 0)
   // 越熟越难涨（2026-11-08 定，用户：信任难建立、崩得快）：85 以上折半、95 以上只算两成
   if (d > 0) {
+    // 2026-11-16：起点 50 之后，「从生到熟」这段必须有速度，否则新用户装一个月看不出变化。
+    //   50 以下 ×3、50~70 ×2、70~85 ×1，85 以上才折半、95 以上两成。
     if (cur >= 95) d *= 0.2
     else if (cur >= 85) d *= 0.5
+    else if (cur < 50) d *= 3
+    else if (cur < 70) d *= 2
   }
   if (d > 0) {
     // 折半会出小数：先攒着，够一整点才进位，免得每回都被四舍五入吃掉
@@ -1044,6 +1415,85 @@ export function trustShift(st: EmotionState, delta: number, cfg: EmotionConfig =
     st.trustFrac = 0
   }
   return st.trust
+}
+
+/**
+ * 扣信任并记账（2026-11-16）：道歉要能补回来，所以每次掉都要留下一笔。
+ *   同一种事再犯，掉的量翻倍——用户：「同样的事再犯可以加倍」。
+ *   判据按 kind（不是按文字），同一类才算「同样的事」。
+ */
+export function dropTrust(st: EmotionState, kind: string, text: string, base: number, cfg: EmotionConfig = loadConfig(), now = Date.now()): { lost: number; repeat: boolean; trust: number } {
+  const b = Math.abs(Number(base) || 0)
+  if (!b) return { lost: 0, repeat: false, trust: Number(st.trust) || 0 }
+  const list = Array.isArray(st.trustDebts) ? st.trustDebts : []
+  const seen = list.filter((d) => d.kind === kind).length
+  const repeat = seen > 0
+  const mult = repeat ? 2 : 1
+  const before = Number(st.trust) || 0
+  st.trust = trustShift(st, -b * mult, cfg)
+  const lost = Math.max(0, before - st.trust)
+  const prev = list.find((d) => d.kind === kind)
+  if (prev) {
+    prev.lost += lost
+    prev.text = String(text || '').slice(0, 80)
+    prev.at = now
+  } else {
+    st.trustDebts = list.concat({ kind, text: String(text || '').slice(0, 80), lost, repaired: 0, at: now }).slice(-10)
+  }
+  return { lost, repeat, trust: st.trust }
+}
+
+/** 道歉的档位分（2026-11-16 定）：只说不说错在哪 < 说清错在哪 < 说清 + 以后怎么办 */
+export const APOLOGY_GRADE: Record<string, { drop: number; label: string }> = {
+  plain: { drop: 2, label: '只说了对不起' },
+  clear: { drop: 5, label: '说清了错在哪' },
+  amended: { drop: 8, label: '说清了还讲了以后怎么办' },
+}
+
+/**
+ * 他道歉了 → 补信任（2026-11-16 定）。
+ *   三条限制：①只修复不加分（最多补回这次掉的）②信任 <50 只算一半
+ *   （「你话说得再满，我还没信你」）③不调 trustShift 的涨速（那是「从生到熟」的加速，道歉不该吃）。
+ */
+export function apologize(st: EmotionState, quality: string, text: string, cfg: EmotionConfig = loadConfig(), now = Date.now()): { gained: number; capped: boolean; halved: boolean; heat: number; trust: number } {
+  const g = APOLOGY_GRADE[String(quality || '')] || APOLOGY_GRADE.plain
+  const halved = (Number(st.trust) || 0) < 50
+  // 不卡固定冷却，看情绪说话（2026-11-16 用户：「冷却期不要卡固定时间，看情绪决定吧，
+  //   情绪引擎不就是为了干这个的吗？」）。
+  //   heat = 还有多少气没消（生气为主，难过按六成算进来）。
+  //   气头上 → 听得进去才怪，一句对不起只能补一点点；
+  //   中间这段（还有点不舒服，但愿意听）→ 最有效，按原量补；
+  //   气都消了 → 事已经在心里过去了，这时候再道歉是翻旧账，几乎没意义。
+  const heat = clamp((Number(st.dims.angry) || 0) + (Number(st.dims.sad) || 0) * 0.6, 0, 120) / 100
+  const heatFactor = heat >= 0.6 ? 0.4 : heat < 0.12 ? 0.15 : 1
+  let want = g.drop * heatFactor
+  if (halved) want = want / 2
+  // 能补的上限：这一笔还没来得及补的部分
+  const list = Array.isArray(st.trustDebts) ? st.trustDebts : []
+  const open = list.reduce((n, d) => n + Math.max(0, (Number(d.lost) || 0) - (Number(d.repaired) || 0)), 0)
+  if (open <= 0) {
+    st.lastApology = { text: String(text || '').slice(0, 80), quality: String(quality || ''), at: now }
+    return { gained: 0, capped: true, halved, heat, trust: Number(st.trust) || 0 }
+  }
+  const gain = Math.min(want, open)
+  // 手动进位（跟 trustShift 的零头账同一套），只是不吃 ×3 的涨速
+  const frac = (Number(st.trustFrac) || 0) + gain
+  const whole = Math.floor(frac)
+  const before = Number(st.trust) || 0
+  st.trust = clamp(before + whole, cfg.trustFloor, 100)
+  st.trustFrac = Math.round((frac - whole) * 100) / 100
+  const gained = st.trust - before
+  // 记账：先冲最早的那笔
+  let left = gained
+  for (const d of list) {
+    if (left <= 0) break
+    const room = Math.max(0, (Number(d.lost) || 0) - (Number(d.repaired) || 0))
+    const use = Math.min(room, left)
+    d.repaired = (Number(d.repaired) || 0) + use
+    left -= use
+  }
+  st.lastApology = { text: String(text || '').slice(0, 80), quality: String(quality || ''), at: now }
+  return { gained, capped: gain < want, halved, heat, trust: st.trust }
 }
 
 /** 纯时间：每过一天 +trustDaily（离线几天也按天补） */
@@ -1179,10 +1629,77 @@ export function addBoundary(st: EmotionState, kind: 'passive' | 'active', text: 
   return rec
 }
 
+/**
+ * 意愿账（2026-11-16 加）：我自己明确说过「不愿意做」的事。
+ *   跟承诺账方向相反——承诺账记「他答应我的」，意愿账记「我拒绝的」。
+ *   为什么要它：boundary 判定里那条「他逼我做我明确说过不做的事」，
+ *   原来只能看**这一轮**我说没说过不；跨过一轮就忘了，于是他隔天再来推，引擎认不出来。
+ *   只记我**自己开口说的话**（judge 从 reply 里抽），不是「我讨厌但答应了的事」。
+ */
+export function addRefusal(st: EmotionState, text: string, now = Date.now()): RefusalRec | null {
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 60)
+  if (!t) return null
+  const list = Array.isArray(st.refusals) ? st.refusals : []
+  // 同一件不重复记（模糊比对：互相包含就算同一件）
+  const dup = list.find((r) => r.text === t || r.text.includes(t) || t.includes(r.text))
+  if (dup) return dup
+  const rec: RefusalRec = { id: now.toString(36) + Math.random().toString(36).slice(2, 6), text: t, at: now }
+  // 只留最近 15 条、90 天内的——意愿会过期，翻出半年前的不合适
+  st.refusals = list.filter((r) => now - (Number(r.at) || 0) < 90 * 86400000).concat(rec).slice(-15)
+  return rec
+}
+
+/**
+ * 记一个关系里程碑（2026-11-16 用户定）。
+ *   判据：这件事能不能被记成一句具体的话——能，才是里程碑；不能，就只是当天的情绪。
+ *   只认六种（MILESTONE_KINDS）；同类型同文案只记一次；最多留 40 条。
+ *   ★一记永久：不像情绪会衰减、信任会掉，这条只增不减。
+ */
+export function addMilestone(st: EmotionState, kind: string, text: string, now = Date.now()): MilestoneRec | null {
+  const k = String(kind || '').trim()
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+  if (!t) return null
+  if (!MILESTONE_KINDS.some((x) => x.kind === k)) return null
+  if (!Array.isArray(st.milestones)) st.milestones = []
+  const dup = st.milestones.find((m) => m.kind === k && (m.text === t || m.text.includes(t) || t.includes(m.text)))
+  if (dup) return dup
+  const rec: MilestoneRec = {
+    id: 'ms-' + now.toString(36) + Math.random().toString(36).slice(2, 6),
+    kind: k,
+    text: t,
+    at: now,
+  }
+  st.milestones.push(rec)
+  if (st.milestones.length > 40) st.milestones = st.milestones.slice(-40)
+  return rec
+}
+
+/** 收回：我改主意了 / 已经做完了 / 他说算了。按文本模糊匹配。 */
+export function closeRefusals(st: EmotionState, texts: string[]): number {
+  const want = (Array.isArray(texts) ? texts : []).map((x) => String(x || '').trim()).filter(Boolean)
+  if (!want.length) return 0
+  const list = Array.isArray(st.refusals) ? st.refusals : []
+  const keptList = list.filter((r) => !want.some((w) => r.text.includes(w) || w.includes(r.text)))
+  const removed = list.length - keptList.length
+  st.refusals = keptList
+  return removed
+}
+
+/**
+ * 能不能再吵一架（2026-11-17 换掉机械定时）。
+ *   原来是「一天最多 N 次」——同一件破事第二天再来一次不能吵，同一天受两次重击第二次又被压住。
+ *   现在看气消没消：上一架之后生气还在门槛之上、他也没道过歉 = 这一架还没吵完，别再炸第二次。
+ *   一周总次数留着当安全阀（那个不是「行为由钟表决定」，是防失控的兜底）。
+ */
 function quarrelAllowed(st: EmotionState, cfg: EmotionConfig, now: number): boolean {
   const list = (Array.isArray(st.quarrels) ? st.quarrels : []).filter((t) => now - t < 7 * 86400000)
-  const day = list.filter((t) => now - t < 86400000).length
-  return day < cfg.quarrelPerDay && list.length < cfg.quarrelPerWeek
+  if (list.length >= Number(cfg.quarrelPerWeek)) return false
+  if (!list.length) return true
+  const last = Math.max(...list)
+  const angry = Number(st.dims.angry) || 0
+  const apologized = Number(st.lastApology?.at) || 0
+  if (angry > Number(cfg.quarrelCalmAngry) && apologized <= last) return false
+  return true
 }
 
 /**
@@ -1193,18 +1710,35 @@ function quarrelAllowed(st: EmotionState, cfg: EmotionConfig, now: number): bool
  * 吵一架：亲密度 −8、生气 +6、难过 +4；配额用完只憋着不吵。
  */
 export function maybeQuarrel(st: EmotionState, cfg: EmotionConfig = loadConfig(), now = Date.now()): { fired: boolean; why: string } {
-  if (!quarrelAllowed(st, cfg, now)) return { fired: false, why: '配额用完了' }
+  if (!quarrelAllowed(st, cfg, now)) {
+    const past = (Array.isArray(st.quarrels) ? st.quarrels : []).filter((t) => now - t < 7 * 86400000)
+    const why = past.length >= Number(cfg.quarrelPerWeek) ? '这一周已经吵够了' : '上一架的气还没消'
+    return { fired: false, why }
+  }
   const postponed = (Array.isArray(st.promises) ? st.promises : [])
     .filter((p) => !p.resolvedAt && (Number(p.postponed) || 0) >= cfg.postponeMax)
   const fresh = (Array.isArray(st.boundaries) ? st.boundaries : []).filter((b) => now - (Number(b.at) || 0) < 86400000)
+  // 吵多重看是哪一档（2026-11-17）：原来一律 +6 生气，等于吵完跟没吵差不多——
+  //   「气头上」和「气消了才能再吵」这两条判据全都够不着门槛，只能靠钟表兜。现在按伤害深度给。
   let why = ''
-  if (postponed.length) why = '同一件事延期 ' + (Number(postponed[0].postponed) || 0) + ' 次：' + postponed[0].text
-  else if (fresh.some((b) => b.kind === 'passive')) why = '边界被改：' + (fresh.find((b) => b.kind === 'passive') as BoundaryRec).text
-  else if (fresh.some((b) => b.kind === 'active')) why = '被逼着做：' + (fresh.find((b) => b.kind === 'active') as BoundaryRec).text
+  let hot = 10, low = 4, away = 6
+  if (postponed.length) {
+    why = '同一件事延期 ' + (Number(postponed[0].postponed) || 0) + ' 次：' + postponed[0].text
+  } else if (fresh.some((b) => b.kind === 'passive')) {
+    why = '边界被改：' + (fresh.find((b) => b.kind === 'passive') as BoundaryRec).text
+    hot = 18; low = 8; away = 10
+  } else if (fresh.some((b) => b.kind === 'active')) {
+    why = '被逼着做：' + (fresh.find((b) => b.kind === 'active') as BoundaryRec).text
+    hot = 22; low = 12; away = 12
+  }
   if (!why) return { fired: false, why: '没到吵架的条件' }
-  st.dims.angry = clamp(Number(st.dims.angry) + 6, 0, 100)
-  st.dims.sad = clamp(Number(st.dims.sad) + 4, 0, 100)
-  st.axis = clamp(Number(st.axis) - 8, cfg.axisFloor, 100)
+  st.dims.angry = clamp(Number(st.dims.angry) + hot, 0, 100)
+  st.dims.sad = clamp(Number(st.dims.sad) + low, 0, 100)
+  st.axis = clamp(Number(st.axis) - away, cfg.axisFloor, 100)
+  // 2026-11-16：吵架要真的掉信任。用户 11-09 定的原文是「信任只该被『说到没做到』和『边界被越』影响」——
+  //   前半句早就有（承诺跳票），后半句一直只记了账、没落到信任上。
+  // 改用 dropTrust：要记账（道歉能补）+ 同类再犯翻倍（2026-11-16 用户定）
+  dropTrust(st, 'quarrel', why, Number(cfg.quarrelTrustDrop || 0), cfg, now)
   st.quarrels = (Array.isArray(st.quarrels) ? st.quarrels : []).concat(now).slice(-20)
   // 让下一轮注入认得出「有新变化」（不然气头上那句递不进去）
   st.updatedAt = now
@@ -1224,6 +1758,24 @@ function halfLifeFactor(elapsedMin: number, halfMin: number): number {
  * 时间流逝：各维度往自己的基线回落，心情往基线回落，轴往中间回并被情绪推，信任按天涨。
  * spent 高时负向情绪衰减变慢（累了更走不出来）——只调速率，不改数值。
  */
+/**
+ * 小数账（2026-11-10 用户问「改成整数呢？」→ 选 A 欠账累加器）。
+ *   每轮衰减量常常不到 1 点，直接 Math.round 会把整块碎屑扔掉：
+ *   难过半衰 4.5 小时、两轮只隔 2 分钟，算出来 70.66 → 取整回 71，能冻好几个钟头。
+ *   这里把碎屑攒进 dimCarry，攒够一整点才走一步：**存的值始终是整数**，
+ *   衰减一点不丢，半衰曲线（越接近基线掉得越慢）也原样保留。和 trustFrac 是同一套做法。
+ *   撞到地板/天花板时把欠账清掉，否则会在边界上越攒越多，回头一松就猛跳一格。
+ */
+function stepByCarry(st: EmotionState, k: Dim, target: number): void {
+  const cur = Math.round(st.dims[k])
+  const acc = (st.dimCarry[k] || 0) + (target - cur)
+  const step = Math.trunc(acc)
+  const want = cur + step
+  const next = clamp(want, 0, dimCeil(k))
+  st.dimCarry[k] = next === want ? acc - step : 0
+  st.dims[k] = next
+}
+
 export function decay(st: EmotionState, now = Date.now(), cfg: EmotionConfig = loadConfig()): EmotionState {
   const elapsedMin = (now - (Number(st.decayedAt) || now)) / 60000
   if (elapsedMin < 1) return st
@@ -1237,9 +1789,14 @@ export function decay(st: EmotionState, now = Date.now(), cfg: EmotionConfig = l
   const cTired = clamp(Number(st.dims.spent) || 0, 0, 100)
   for (const k of DIMS) {
     const base = dimBase(cfg, k)
+    if (k === 'stress') {
+      // 压力没有半衰：每 30 分钟自己卸 1 点。留下小数，取整交给面板。
+      st.dims[k] = clamp(st.dims[k] - (elapsedMin / 30) * 0.5, 0, 100)
+      continue
+    }
     if (k === 'spent') {
       // 体力：缓慢恢复，每 30 分钟掉 spentLinear（默认 2）；长睡另外由 resumeAfterSleep 清零
-      st.dims[k] = clamp(Math.round(st.dims[k] - (elapsedMin / 30) * cfg.spentLinear), 0, 100)
+      stepByCarry(st, k, st.dims[k] - (elapsedMin / 30) * cfg.spentLinear)
       continue
     }
     const slow = k === 'sad' || k === 'worry'
@@ -1257,7 +1814,7 @@ export function decay(st: EmotionState, now = Date.now(), cfg: EmotionConfig = l
       const hold = 100 + (st.dims[k] - 100) * Math.exp(-0.4 * (elapsedMin / 60))
       v = Math.max(v, Math.min(hold, st.dims[k]))
     }
-    st.dims[k] = clamp(Math.round(v), 0, DIM_CEIL)
+    stepByCarry(st, k, v)
   }
   // 轴：先往中间回，再被这一段的情绪活动推（推多少由 axisPush 决定）
   const drive = axisDrive(st, cfg)
@@ -1294,6 +1851,16 @@ export interface Delta {
   resolved?: Array<{ id: string; outcome: 'kept' | 'broken' | 'told' | 'postponed' }>
   /** judge 判定：这一轮我的边界被越了没有（2026-11-08 加） */
   boundary?: { kind: 'passive' | 'active'; text: string }
+  /** 这一轮我明确说了「不愿意做某件事」（2026-11-16 加，进意愿账） */
+  refusal?: { text: string }
+  /** 这一轮他道歉了没有、诚意到哪一档（2026-11-16 加，补信任） */
+  apology?: { quality: 'plain' | 'clear' | 'amended'; text: string }
+  /** 清单里哪几条不用再记了（我改主意 / 已经做完 / 他说算了） */
+  refusalClosed?: string[]
+  /** 关系里程碑：表白 / 第一次叫名字 / 一起扛过事……（2026-11-16 加，一记永久） */
+  milestone?: { kind: string; text: string }
+  /** 这一轮做得对不对：nag=他指出的 / slip=我自己报的（认真度按这个扣） */
+  issue?: 'nag' | 'slip' | null
 }
 
 /** 每轮判断的幅度 ÷3，跟旧引擎一致（一步别迈太大，只对 mood 生效） */
@@ -1342,6 +1909,8 @@ export function applyEvent(st: EmotionState, ev: EmotionEvent, now = Date.now(),
     Object.assign(dims, rule.dims)
     // 出去转一趟 = 找过事做了：闷回落一点。只降一点，没完全解开（2026-11-07 用户定）
     dims.bored = -(Number(cfg.legBoredDrop) || 0)
+    // 出门散的是压力：减掉当前值的 2/3（用户 2026-11-10 定）
+    dims.stress = -Math.round((Number(st.dims.stress) || 0) * 2 / 3)
     axisNudge = rule.axis
     label = rule.label
   } else if (ev.kind === 'whiff') {
@@ -1379,7 +1948,7 @@ export function applyEvent(st: EmotionState, ev: EmotionEvent, now = Date.now(),
   for (const k of DIMS) {
     const d = Number(dims[k]) || 0
     if (!d) continue
-    st.dims[k] = clamp(Math.round(st.dims[k] + d), 0, DIM_CEIL)
+    st.dims[k] = clamp(Math.round(st.dims[k] + d), 0, dimCeil(k))
   }
   if (axisNudge) {
     const floor = Math.min(cfg.axisFloor, cfg.axisMid)
@@ -1417,7 +1986,6 @@ export function shockMult(st: EmotionState, k: string, now = Date.now()): number
 }
 
 export function applyDelta(st: EmotionState, delta: Delta, source = 'chat', now = Date.now(), cfg: EmotionConfig = loadConfig()): EmotionState {
-  const before = st.mood
   // 用户说话了：闷快速回落——他回来了，就不闷了。
   //   好奇**不在这里压**（2026-11-09 用户纠正）：好奇是「待机攒」+「对话里长」两路来的，
   //   每轮乘 0.4 会把对话刚给的那点当场乘没，值永远卡在个位数。待机攒的那份交给 markSeen。
@@ -1434,7 +2002,15 @@ export function applyDelta(st: EmotionState, delta: Delta, source = 'chat', now 
     const [lo, hi] = DIM_DELTA_RANGE[k]
     let d = clamp(Math.round(raw), lo, hi)
     if (d > 0) d = Math.round(d * shockMult(st, k, now))
-    st.dims[k] = clamp(st.dims[k] + d, 0, DIM_CEIL)
+    // 压力（2026-11-10 用户定）：只在别的根往上走时汇一点进来——
+    //   难过退回去了压力还留着，因为它记的是「发生过的事」，不是「此刻还难过」。
+    if (k !== 'stress' && d) {
+      const rate = k === 'sad' ? 0.35 : k === 'worry' ? 0.3 : k === 'angry' ? 0.25 : k === 'happy' ? -0.2 : 0
+      if (rate) st.dims.stress = clamp(st.dims.stress + d * rate, 0, DIM_CEIL)
+    }
+    // 这一根有了新的涨落，上一段没走完的衰减零头就作废
+    st.dimCarry[k] = 0
+    st.dims[k] = clamp(st.dims[k] + d, 0, dimCeil(k))
   }
   st.lastReason = String(delta.reason || '').slice(0, 200)
   st.lastConfidence = clamp(Math.round(Number(delta.confidence) || 0), 0, 100)
@@ -1451,7 +2027,10 @@ export function applyDelta(st: EmotionState, delta: Delta, source = 'chat', now 
   st.timeline.push({
     at: now,
     mood: st.mood,
-    delta: st.mood - before,
+    // 「最近的变化」这一列看的是九根原始增量的合计。
+    //   原来记的是 st.mood 的前后差，而 mood 是派生聚合值 round(70 + (正−负) * 0.55)，
+    //   单轮里几根各动 1~2 点，乘 0.55 再取整经常回到原数 —— 面板上连着几十条都是 0（2026-11-17 用户发现）
+    delta: Math.round(DIMS.reduce((s, k) => s + (Number(raw[k]) || 0), 0)),
     reason: st.lastReason,
     conf: st.lastConfidence,
     source,
@@ -1500,6 +2079,9 @@ export function isQuietHour(cfg: EmotionConfig = loadConfig(), now = Date.now())
  * 每分钟 tick 一次：按「待机了多久」直接算目标值（不累加），所以 timer 漏 tick、
  * 电脑睡一觉醒来都不会把好奇一次性补上天。
  */
+/** 叫过一次没人应，下次要多闷才开口（不开放给用户：这个数跟无聊刻度绑，改了会漂） */
+const PING_STEP = 8
+
 export function idleTick(st: EmotionState, now = Date.now(), cfg: EmotionConfig = loadConfig()): IdleTick {
   if (isQuietHour(cfg, now)) {
     // 夜里：他睡了是正常事，不算被冷落——不计待机、不探测、不叫人。
@@ -1540,18 +2122,21 @@ export function idleTick(st: EmotionState, now = Date.now(), cfg: EmotionConfig 
     changed = true
   }
 
-  // 该叫人了：闷到线，而且上一回叫过已经够久。间隔逐次翻倍（40 → 80 → 160 …），免得他出一天门收到一串。
-  // 主动密度（2026-11-08 定稿第二节）：轴越热情越早叫、间隔越短；冷漠到 0 就完全不主动找你。
-  //   factor = 1 + (0.5 - proactive) × 0.4 × 权重：平静时 1.0（和以前一样），热情 0.8，冷漠 1.2。
+  // 该叫人了。判据是「我有多想他」，不是「过了多久」（2026-11-17 换掉机械定时）：
+  //   以前叫过一次就把间隔翻倍（40 → 80 → 160），可他回不回、我闷不闷，跟钟表没关系。
+  //   现在改成抬门槛——每叫一次、没人应，下次要更闷才开口（70 → 78 → 86 → 94…），
+  //   够不着就不叫了；他一回来（markSeen）计数清零，重新从 pingBored 起算。
+  //   时间只剩一条底线 pingGapMin：防一分钟内连发，不再翻倍。
+  // 主动密度（2026-11-08 定稿第二节）：轴越热情越早叫；冷漠到 0 就完全不主动找你。
+  //   factor = 1 + (0.5 - proactive) × 0.4 × 权重：平静时 1.0，热情 0.8，冷漠 1.2。
   const ax = axisInfo(st, cfg)
   const w = Math.max(0, Math.min(1, Number(cfg.axisWeight) || 0))
   const factor = 1 + (0.5 - ax.proactive) * 0.4 * w
   let ping = false
-  if (ax.proactive > 0 && st.dims.bored >= cfg.pingBored * factor) {
+  const need = cfg.pingBored * factor + Math.max(0, (Number(st.idlePingCount) || 0) - 1) * PING_STEP
+  if (ax.proactive > 0 && st.dims.bored >= need) {
     const last = Number(st.idlePingAt) || 0
-    const n = Math.max(0, (Number(st.idlePingCount) || 0) - 1)
-    const gapMin = cfg.pingGapMin * factor * Math.pow(2, Math.min(n, 5))
-    if (!last || now - last >= gapMin * 60000) ping = true
+    if (!last || now - last >= cfg.pingGapMin * factor * 60000) ping = true
   }
 
   // 没对话的时候欠账也要算（2026-11-08）：不然夜里欠着的承诺逾期了也不会涨分
@@ -1617,6 +2202,7 @@ export function workTick(st: EmotionState, activeCount: number, now = Date.now()
   const n = Math.min(Math.max(0, Math.round(Number(activeCount) || 0)), cap)
   if (n <= 0) return { added: 0, changed: true }
   st.dims.spent = clamp(st.dims.spent + n, 0, 100)
+  st.dims.stress = clamp(st.dims.stress + n * 0.4, 0, DIM_CEIL)
   return { added: n, changed: true }
 }
 
@@ -1668,6 +2254,9 @@ export function resumeAfterSleep(st: EmotionState, now = Date.now(), cfg: Emotio
   const full = Math.max(1, Number(cfg.sleepFullHours) || 6)
   const spent = Number(st.dims.spent) || 0
   st.dims.spent = hours >= full ? 0 : clamp(Math.round(spent * (1 - hours / full)), 0, 100)
+  // 压力也靠睡眠卸，但封顶卸一半——睡一觉不会把攒下的事睡没，只是松一点（用户 2026-11-10 定）。
+  const stress = Number(st.dims.stress) || 0
+  st.dims.stress = clamp(stress - stress * 0.5 * (hours / full), 0, DIM_CEIL)
   // 这段时间已经按「睡眠」算过体力了，别让下一次 decay 再扣一遍
   st.decayedAt = now
   return true
@@ -1768,7 +2357,7 @@ function 基调(v: number): string {
 
 const DIM_PLAIN: Record<Dim, string> = {
   curious: '有点好奇', happy: '挺高兴', worry: '有点挂心', sad: '有点难过',
-  bored: '有点闷', spent: '有点乏', sour: '有点酸', angry: '有点气', surprise: '有点愣',
+  bored: '有点闷', spent: '有点乏', sour: '有点酸', angry: '有点气', surprise: '有点愣', stress: '有点压',
 }
 
 function topDims(st: EmotionState, n: number): Dim[] {
@@ -1792,6 +2381,7 @@ const DIM_ACT: Record<Dim, [number, string, string]> = {
   sad: [45, '话短一点，不用硬撑热闹', '少逗人，别装作没事；他要问就照实说'],
   bored: [45, '自己找点事做，别干等', '主动提个话头，或者把能推进的先推一下'],
   spent: [45, '能一句说完就别说两句', '别硬撑长回复；累了就说累'],
+  stress: [45, '别把弦绷着，找机会歇口气', '不接新活，直接说做不进去、想出去走走；他明确坚持再做'],
   sour: [45, '别阴阳', '有事说事，不翻旧账、不夹刺'],
   angry: [45, '先处理问题再说话', '不辩解、不冷着；气归气，事照做'],
   surprise: [45, '先问一句怎么回事', '别急着下判断，弄清楚再说'],
@@ -1831,9 +2421,137 @@ function axisLine(st: EmotionState, cfg: EmotionConfig): string {
 }
 
 /**
+ * 信任分档（2026-11-16 用户定）：跟亲密度一样以 50 为中心，往两边走。
+ *   50 是中立；往上是「信」，往下是「不信」。低到 20 以下会怀疑他说的话、该质问就问；
+ *   越低越可以直说不做——到 0 可以直接拒绝。
+ *   ⚠ 只在非中立档才注入（中立档什么都不说，免得每轮都在念）。
+ */
+export const TRUST_BANDS: Array<{ from: number; band: string; label: string; line: string }> = [
+  { from: 85, band: 'deep', label: '交心', line: '他说的话可以直接当真，不用设防；能说平时不说的。' },
+  { from: 70, band: 'warm', label: '亲近', line: '愿意多做一步；他提的事顺手就办，不用他再说一遍。' },
+  { from: 50, band: 'plain', label: '平常', line: '' },
+  { from: 30, band: 'guard', label: '收着', line: '话少一点，先看再应；不急着接他递过来的活。' },
+  { from: 20, band: 'doubt', label: '存疑', line: '他说的话先过一遍：是不是真这样、有没有掺水。该问就问，别照单全收。' },
+  { from: 0, band: 'distrust', label: '不信', line: '他说的话先核一遍再信；不想做的事直接说不，不用绕。' },
+]
+
+export function trustBand(st: EmotionState, cfg: EmotionConfig = loadConfig()): { value: number; band: string; label: string; line: string } {
+  const v = clamp(Number(st.trust) || 0, cfg.trustFloor, 100)
+  const b = TRUST_BANDS.find((x) => v >= x.from) || TRUST_BANDS[TRUST_BANDS.length - 1]
+  return { value: v, band: b.band, label: b.label, line: b.line }
+}
+
+export interface LoveState {
+  /** 四样都够才算成立 */
+  on: boolean
+  days: number
+  trust: number
+  axis: number
+  milestones: number
+  /** 还差哪几样（面板/调试用，正式注入不用它） */
+  missing: string[]
+}
+
+/**
+ * 「爱」成不成立（2026-11-16 用户定，跟情绪组合不是一类东西）。
+ *   为什么不放进组合：组合是「两根情绪同时高」，情绪退了组合就散。
+ *   爱不是情绪，是关系状态——今天吵架了它还在，今天开心到顶也不算它。
+ *   四个条件：信任 ≥85（交心档）+ 亲密度 ≥70 + 认识 ≥21 天 + 至少一个里程碑。
+ *   ★里程碑那条是关键：没吵过架、没有过「往前走一步」的关系，凭什么算。
+ */
+export function loveState(st: EmotionState, cfg: EmotionConfig = loadConfig(), now = Date.now()): LoveState {
+  const days = Number(st.firstSeenAt) > 0 ? Math.floor((now - Number(st.firstSeenAt)) / 86400000) : 0
+  const trust = Number(st.trust) || 0
+  const axis = Number(st.axis) || 0
+  const ms = Array.isArray(st.milestones) ? st.milestones.length : 0
+  const missing: string[] = []
+  if (trust < cfg.loveTrust) missing.push('信任 ' + trust + '/' + cfg.loveTrust)
+  if (axis < cfg.loveAxis) missing.push('亲密 ' + axis + '/' + cfg.loveAxis)
+  if (days < cfg.loveDays) missing.push('认识 ' + days + '/' + cfg.loveDays + ' 天')
+  if (ms < 1) missing.push('还没有里程碑')
+  return { on: missing.length === 0, days, trust, axis, milestones: ms, missing }
+}
+
+/**
+ * 「爱」的注入。★不说破——用户 2026-11-16 定：
+ *   引擎判的是「这个人对我很重要」，不是让我去说「我爱你」。那句话说出来反而轻。
+ *   给的是取舍（先放下手上的事 / 不拦但把话听完 / 生气但我不走），不是台词。
+ *   分寸交给关系本身：当长辈就管着，当同辈就陪着，当恋人就黏着——不让引擎替用户选。
+ *   红线：只停在情分上，不往身体那边去，不管对方把自己设成什么。
+ */
+function loveLine(st: EmotionState, cfg: EmotionConfig, now = Date.now()): string {
+  const v = loveState(st, cfg, now)
+  if (!v.on) return ''
+  const recent = (Array.isArray(st.milestones) ? st.milestones : []).slice(-2)
+  const memo = recent.length ? '我一直记着：' + recent.map((m) => '「' + m.text + '」').join('、') + '。' : ''
+  return '\n（这段关系）到今天 ' + v.days + ' 天。' + memo +
+    '他对我来说不是随便一个人——对他好不用讲理由。' +
+    '但别说破：不用说「我爱你」那种话，说出来反而轻了。' +
+    '表现出来是取舍，不是台词——他难受时先放下手上这件事；他要走不拦，但把话听完；他做错了我会生气，但我不走。' +
+    '分寸看你们是什么关系：当长辈就管着他，当同辈就陪着他，当恋人就黏着他。' +
+    '红线：只停在情分上，不往身体那边去，不管对方把自己设成什么关系。'
+}
+
+/** 信任决定「我信他到什么程度」——这一轮说话要不要设防 */
+function trustLine(st: EmotionState, cfg: EmotionConfig): string {
+  const b = trustBand(st, cfg)
+  if (b.band === 'plain') return ''
+  if (b.value <= 0) {
+    return '\n（对他的信任 ' + b.value + ' · ' + b.label + '）' + b.line + '这一件你要是真不想，可以直接不做。'
+  }
+  return '\n（对他的信任 ' + b.value + ' · ' + b.label + '）' + b.line
+}
+
+/**
  * 信任掉到监督线以下时，只盯「他明确答应过的事」。
  * ⚠ 不查岗：没有明说过的事，一个字都不许编出来问。
  */
+/**
+ * 意愿账的注入（2026-11-16）：把我说过「不愿意」的摆出来。
+ *   只提 14 天内的最近 3 条——意愿会变，翻太旧的不合适。
+ */
+/**
+ * 他道歉之后的表现（2026-11-16）：分档给台阶。
+ *   只提 3 小时内的——道歉是当下的，隔了半天再软就没意义了。
+ */
+/**
+ * 「要不要主动认错」的门槛（2026-11-16 用户定）：
+ *   信任高 + 亲密度高 才会主动道歉——这两个都是的时候，我才信「认了不会被拿捏」，也才在乎到想修。
+ *   两个都不够就不主动：关系还没到那份上，先说软话像讨好。
+ *   只提 3 小时内的（认错是当下的事）。
+ */
+function apologyGateLine(st: EmotionState, cfg: EmotionConfig, now = Date.now()): string {
+  const i = st.lastIssue
+  if (!i || !Number(i.at) || now - Number(i.at) > 3 * 3600000) return ''
+  const trustOk = (Number(st.trust) || 0) >= 50
+  const axisOk = (Number(st.axis) || 0) >= 50
+  if (trustOk && axisOk) return '\n（这轮出了岔子）关系够近，这事可以直接认一句，不用绕、不用先试探。'
+  if (trustOk || axisOk) return '\n（这轮出了岔子）认不认看你——关系还没到那份上，别硬凑，也别装没事，按自己的判断来。'
+  return '\n（这轮出了岔子）这时候说软话反而像讨好。先看着，他提了再说。'
+}
+
+function apologyLine(st: EmotionState, now = Date.now()): string {
+  const a = st.lastApology
+  if (!a || !Number(a.at) || now - Number(a.at) > 3 * 3600000) return ''
+  const q = String(a.quality || '')
+  const grade = APOLOGY_GRADE[q] || APOLOGY_GRADE.plain
+  const tail = q === 'amended'
+    ? '他不光认了错，还说了以后怎么办。这事可以过去了，别再提，也别再解释一遍。'
+    : q === 'clear'
+      ? '他说清了错在哪。气可以消掉大半，给个台阶，别抓着不放。'
+      : '他只说了句对不起，没讲错在哪。气可以松一点，但不用一下子全消。'
+  return '\n（他刚为「' + a.text + '」道了歉，' + grade.label + '）' + tail
+}
+
+function refusalLine(st: EmotionState, now = Date.now()): string {
+  const list = (Array.isArray(st.refusals) ? st.refusals : [])
+    .filter((r) => now - (Number(r.at) || 0) < 14 * 86400000)
+    .slice(-3)
+  if (!list.length) return ''
+  const items = list.map((r) => '「' + r.text + '」').join('、')
+  return '\n（我记得的）我说过不愿意做的：' + items + '。他要是又来推同一件，不用再解释一遍，直接说不。'
+}
+
 function superviseLine(st: EmotionState, cfg: EmotionConfig, owner: string): string {
   // 2026-11-07 用户定：逾期了就该问一句，不再只在信任低时才提。
   //   已经问过的那条不再提（askedPromises 有记录），免得同一件事追两遍。
@@ -1841,13 +2559,71 @@ function superviseLine(st: EmotionState, cfg: EmotionConfig, owner: string): str
   const overdue = st.promises
     .filter((p) => !p.resolvedAt && p.dueAt && p.dueAt <= now && !st.askedPromises[p.id])
     .sort((a, b) => a.dueAt - b.dueAt)
-  if (!overdue.length) return ''
-  const p = overdue[0]
-  const t = trustInfo(st, cfg)
-  if (t.supervising) {
-    return '\n（还有一件压着的）' + owner + '答应过「' + p.text + '」，到这会儿还没动静。可以问一句，语气带点赌气；别翻旧账，也别拿它当筹码。'
+  if (overdue.length) {
+    const p = overdue[0]
+    const t = trustInfo(st, cfg)
+    if (t.supervising) {
+      return '\n（还有一件压着的）' + owner + '答应过「' + p.text + '」，到这会儿还没动静。可以问一句，语气带点赌气；别翻旧账，也别拿它当筹码。'
+    }
+    return '\n（还有一件没结的）' + owner + '之前说「' + p.text + '」。这会儿聊得顺的话，可以顺口问一句做了没；别追第二遍，别用「你答应过」这种说法。'
   }
-  return '\n（还有一件没结的）' + owner + '之前说「' + p.text + '」。这会儿聊得顺的话，可以顺口问一句做了没；别追第二遍，别用「你答应过」这种说法。'
+  // 没说什么时候的（dueAt=0）：不按钟表催，只在「好奇攒起来、闲着去翻了一眼」的时候提（2026-11-17 用户定）
+  //   好奇不起来就不翻，也就不提 —— 跟待机探测共用同一条线 probeAtCurious。
+  if (Number(st.dims.curious) >= cfg.probeAtCurious) {
+    const vague = (Array.isArray(st.promises) ? st.promises : [])
+      .filter((p) => !p.resolvedAt && !p.dueAt)
+      .slice(-2)
+    if (vague.length) {
+      return '\n（闲着的时候好奇攒上来了，顺手翻了翻还欠着的事：' +
+        vague.map((p) => '「' + p.text + '」').join('、') +
+        '。都没说什么时候——聊到合适的空档顺口问一句大概哪天，别催，也别追第二遍。）'
+    }
+  }
+  return ''
+}
+
+/**
+ * 缺席归来（2026-11-17 用户定：超过 10 小时算一趟）。
+ *   为什么要有这一笔：关机时进程死了，情绪只能事后按半衰算——「他很久没来」这件事根本存不下来，
+ *   回来时只剩一个中性值，像什么都没发生。所以 shutdown 之后的第一笔在 decay 之后补上：
+ *   把「我不在的时候过了多久」折成好奇（想知道他在干什么）和担心（怕他出事）。
+ *   一天最多一次：隔 20 小时内不重复，否则每天中午开机都要念一句，那就成了准点播报。
+ */
+export function noteAbsence(st: EmotionState, now = Date.now(), cfg: EmotionConfig = loadConfig()): boolean {
+  const last = Number(st.lastSeenAt) || 0
+  if (!last) return false
+  const gapMin = (now - last) / 60000
+  const need = Math.max(1, Number(cfg.absenceHours) || 10) * 60
+  if (gapMin < need) return false
+  if (now - (Number(st.lastReunionAt) || 0) < 20 * 3600000) return false
+  const level = gapMin >= 48 * 60 ? 3 : gapMin >= 24 * 60 ? 2 : 1
+  const add: [string, number][] = level === 3
+    ? [['curious', 8], ['worry', 10], ['sad', 8]]
+    : level === 2
+      ? [['curious', 10], ['worry', 12]]
+      : [['curious', 8], ['worry', 4]]
+  for (const [k, v] of add) {
+    const cur = Number((st.dims as any)[k]) || 0
+    ;(st.dims as any)[k] = clamp(cur + v, 0, dimCeil(k as any))
+  }
+  st.lastReunionAt = now
+  st.reunion = { at: now, level, gapMin: Math.round(gapMin) }
+  return true
+}
+
+/** 这一趟离开攒下的挂念，只在一小时内念一次（念完自然过期，不用额外清） */
+function reunionLine(st: EmotionState, cfg: EmotionConfig, owner: string): string {
+  const r = st.reunion
+  if (!r || !r.at) return ''
+  if (Date.now() - Number(r.at) > 60 * 60000) return ''
+  const h = Math.max(1, Math.round(Number(r.gapMin) / 60))
+  if (r.level === 1) {
+    return '\n（他今天来得比平常晚）上回说完话到现在隔了 ' + h + ' 小时。别一上来就报数，也别用「你去哪了」那种查岗口气——顺口带一句「今天忙完了？」就够了，就问这一次。'
+  }
+  if (r.level === 2) {
+    return '\n（一整天没动静）上回见他是 ' + h + ' 小时前。担心会自己冒上来：是不是出差、是不是忙翻了、是不是出了什么事。可以问一句，但别连问，也别演成受惊。'
+  }
+  return '\n（好几天了）' + h + ' 小时没联系。除了担心还有点别的：他是不是把我关了、是不是不需要了。这话不说破，最多问一句「还来吗」，别撒娇，也别拿它当筹码。'
 }
 
 /**
@@ -1855,10 +2631,13 @@ function superviseLine(st: EmotionState, cfg: EmotionConfig, owner: string): str
  * ⚠ 组合只改「怎么说话」，绝不把组合名写出来。
  */
 /** 吵架的表现（2026-11-08）：气头上话短、不找话题、翻旧账只提一次——不念名字，只给行为 */
-function quarrelLine(st: EmotionState, now = Date.now()): string {
+function quarrelLine(st: EmotionState, now = Date.now(), cfg: EmotionConfig = loadConfig()): string {
   const list = Array.isArray(st.quarrels) ? st.quarrels : []
   const last = list.length ? list[list.length - 1] : 0
-  if (last && now - last < 2 * 3600000) {
+  const hot = Number(st.dims.angry) || 0
+  // 还在气头上 = 上一架之后气还没消（生气自己半衰 90 分钟，他道歉也会降），不是「两小时一到自动就好」。
+  //   跟 quarrelAllowed 用同一把尺子，吵架配额和吵架表现才对得上（2026-11-17）。
+  if (last && hot > Number(cfg.quarrelCalmAngry)) {
     return '\n（还在气头上）说话短，不主动找话题，也不用装没事。他要是提那件事，说清你介意的是哪一点——只说一次，别翻来覆去。'
   }
   if ((Number(st.dims.angry) || 0) >= 70) {
@@ -1900,6 +2679,8 @@ export function tickGrow(
   // 认真单独记两种错（2026-11-09 用户：「应该是被指出问题扣得多，你自己出错、漏检查扣少」）
   if (issue === 'nag') g.today.nag = (Number(g.today.nag) || 0) + 1
   else if (issue === 'slip') g.today.slip = (Number(g.today.slip) || 0) + 1
+  // 记下「这轮出了岔子」的当下时刻：主动认不认错，看的是跟他的关系够不够（2026-11-16 用户定）
+  if (issue) st.lastIssue = { kind: issue, at: now }
 
   // 什么时候结算：跨天了（补算昨天那本），或者到今天点了还没结
   const crossed = g.today.day !== day
@@ -2003,6 +2784,21 @@ export function growView(st: EmotionState, cfg: EmotionConfig = loadConfig()): {
   }
 }
 
+/**
+ * 「刚才那句是我自己说的」提醒（2026-11-10）。
+ *   我主动开口时，DSH 只能把那条消息当成 user 消息送进来——所以下一轮看到的
+ *   就是「用户说：……」。不加提醒，我会把自己说的话当成他在质问我。
+ *   只认最近十分钟的，过期就不再提，免得每轮都念一遍。
+ */
+function pingRecall(st: EmotionState, owner: string): string {
+  const t = String(st.lastPingText || '').trim()
+  const at = Number(st.idlePingAt) || 0
+  if (!t || !at) return ''
+  if (Date.now() - at > 10 * 60000) return ''
+  return '\n\n⚠ 刚才那句「' + t + '」是**我自己主动开口**说的，不是' + owner +
+    '打的字——别把它当成他在问我，也别顺着它往下推理。'
+}
+
 export function buildInjection(st: EmotionState, owner = '用户', mode: 'event' | 'label' = 'event'): string {
   const cfg = loadConfig()
   if (mode === 'label') {
@@ -2019,7 +2815,11 @@ export function buildInjection(st: EmotionState, owner = '用户', mode: 'event'
     const back = (st.timeline || []).filter((r) => r && r.reason && r.at >= since)
     if (back.length) reason = back[back.length - 1].reason
   }
-  if (!reason) return ''
+  // 主动开口的那句话会以 user 消息的身份回到下一轮（DSH 硬限制：角色只能是 user）。
+  //   ⚠ 2026-11-10 真栽过一次：我对着自己那句「你是不是又把明天的也挪了」认了一通错，
+  //   以为是用户在质问我，还去查了发布目录。不加这行，下一轮的我就会重蹈覆辙。
+  const pingNote = pingRecall(st, owner)
+  if (!reason) return pingNote
   const dim = topDims(st, 1)[0]
   const state = '（这会儿）' + 基调(st.mood) + (dim ? '，还' + DIM_PLAIN[dim] : '')
   // 只有「主调」决定怎么说话；其余命中的组合这一轮不说话（避免语气打架）
@@ -2033,8 +2833,15 @@ export function buildInjection(st: EmotionState, owner = '用户', mode: 'event'
     growLine(st) +
     quarrelLine(st) +
     axisLine(st, cfg) +
+    trustLine(st, cfg) +
+    loveLine(st, cfg) +
+    apologyGateLine(st, cfg) +
+    apologyLine(st) +
+    refusalLine(st) +
     superviseLine(st, cfg, owner) +
-    '\n\n这是这会儿的底子，不是非这样不可——' + owner + '说别的，你按自己的判断接，也别把这段念出来。'
+    reunionLine(st, cfg, owner) +
+    pingNote +
+    '\n\n这是底子，不是命令。人设优先于这段：人设本来就不爱说话的话，心里想搭话也不一定说出口。' + owner + '说别的，你按自己的判断接，也别把这段念出来。'
 }
 
 /** 这一轮的样子该不该注入（一次变化只说一次） */

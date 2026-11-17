@@ -1,8 +1,8 @@
 /**
- * dsh-emotion — 设置页「情绪」板块（Client 半边）
+ * dsh-emotion-state — 设置页「情绪」板块（Client 半边）
  *
  * 数据全部从 /mo-emotion/state 拉（宿主侧只读路由），前端不写任何状态。
- * 展示：这会儿（心情 / 平静轴 / 信任）/ 雷达 9 根 / 4 个组合 / 答应过的事 / 注入预览 /
+ * 展示：这会儿（心情 / 平静轴 / 信任）/ 雷达 9 根 / 全部组合 / 答应过的事 / 注入预览 /
  *       全部数值（按 CFG_SCHEMA 自动生成，改完立刻存）/ 轨迹。
  *
  * 2026-11-06 重设计：雷达 9 根（去掉心疼、甜，加上生气、惊讶）；平静改成轴；信任单独一行。
@@ -17,18 +17,22 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     /** 跟 package.json 的 version 手动对齐（用户要能在面板上看见跑的是哪一版） */
-    const VERSION = '0.9.0'
+    const VERSION = '0.10.0'
 
     // 兜底（服务端会带 dims / dimLabel 下来，正常用服务端的）
-    const DIM_ORDER_FALLBACK = ['curious', 'happy', 'worry', 'sad', 'bored', 'spent', 'sour', 'angry', 'surprise']
+    const DIM_ORDER_FALLBACK = ['curious', 'happy', 'worry', 'sad', 'bored', 'spent', 'sour', 'angry', 'surprise', 'stress']
     const DIM_LABEL_FALLBACK = {
-      curious: '好奇', happy: '开心', worry: '担心', sad: '难过', bored: '闷',
-      spent: '累', sour: '吃醋', angry: '生气', surprise: '惊讶',
+      curious: '好奇', happy: '开心', worry: '担心', sad: '难过', bored: '无聊',
+      spent: '疲惫', sour: '吃醋', angry: '生气', surprise: '惊讶',
     }
     const DIM_TONE = {
       curious: '#5fb8e0', happy: '#63d7d0', worry: '#e0b050', sad: '#7f8fc4',
-      bored: '#9a9a9a', spent: '#b06a9a', sour: '#9cb85a', angry: '#e0705f', surprise: '#c9a6f0',
+      bored: '#9a9a9a', spent: '#b06a9a', sour: '#9cb85a', angry: '#e01b1b', surprise: '#c9a6f0',
+      stress: '#e8457f',
     }
+    // 2026-11-16：信任分档，跟亲密度一样以 50 为中心往两边走（和服务端 TRUST_BANDS 保持一致）
+    const TRUST_BAND_LABEL = (v) => (v >= 85 ? '交心' : v >= 70 ? '亲近' : v >= 50 ? '平常' : v >= 30 ? '收着' : v >= 20 ? '存疑' : '不信')
+    const TRUST_BAND_COLOR = (v) => (v >= 85 ? '#63d7d0' : v >= 70 ? '#7ec8c2' : v >= 50 ? '#9aa8b6' : v >= 30 ? '#d8a25e' : v >= 20 ? '#e08f5f' : '#e0705f')
 
     const CSS = [
       '.moe-wrap{display:flex;flex-direction:column;gap:18px;padding:2px 0 10px;font-size:13px;color:var(--dsw-alias-label-primary);max-width:820px}',
@@ -96,6 +100,19 @@ window.__ModuleLoader__.load({
       '.moe-combo-mark{font-size:10.5px;color:var(--dsw-alias-brand-primary,#63d7d0)}',
       '.moe-combo-num{font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;margin-left:auto}',
       '.moe-combo-tone{color:var(--dsw-alias-label-secondary)}',
+      // 两条鱼：别的同类心情插件还在跑时的警告条
+      '.moe-conflict{padding:9px 12px;border-radius:9px;margin-bottom:10px;background:rgba(224,176,80,.12);border:1px solid rgba(224,176,80,.4)}',
+      '.moe-conflict-t{font-weight:600;font-size:12.5px;margin-bottom:3px;color:#e0b050}',
+      '.moe-conflict-b{font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-secondary)}',
+      // 彩蛋：没达成只有一颗空心心和半句话，不给进度也不给攻略
+      '.moe-secret{display:inline-flex;align-items:center;gap:5px;margin-left:9px;font-size:11.5px;color:var(--dsw-alias-label-secondary,#8a93a0);opacity:.55;user-select:none;vertical-align:middle}',
+      '.moe-secret-heart{font-size:12.5px;line-height:1;color:#8a93a0}',
+      '.moe-secret.on{opacity:.95;cursor:pointer}',
+      '.moe-secret.on:hover{opacity:1}',
+      '.moe-secret.on .moe-secret-heart{color:#e2708a}',
+      '.moe-secret-body{margin-top:8px;padding:9px 12px;border-radius:9px;background:rgba(226,112,138,.07);border:1px solid rgba(226,112,138,.22);font-size:12px;line-height:1.7}',
+      '.moe-secret-ms{color:var(--dsw-alias-label-secondary)}',
+      '.moe-secret-note{margin-top:6px;font-size:11px;opacity:.7}',
       // 答应过的事
       '.moe-promise-row{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:var(--dsw-alias-bg-layer-2,rgba(255,255,255,.035));border:1px solid var(--dsw-alias-border-l1,rgba(255,255,255,.07));font-size:12px}',
       '.moe-promise-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -168,7 +185,7 @@ window.__ModuleLoader__.load({
       return overdue ? '过了 ' + s : s
     }
 
-    // 雷达图：九根轴，画格子 + 数据多边形
+    // 雷达图：十根轴，画格子 + 数据多边形
     function Radar({ order, label, dims }) {
       const AXES = order
       const cx = 135, cy = 122, R = 82
@@ -246,6 +263,8 @@ window.__ModuleLoader__.load({
       const [cfg, setCfg] = React.useState(null)
       const [newPromise, setNewPromise] = React.useState('')
       const [newDue, setNewDue] = React.useState('60')
+      // 彩蛋：达成之后点一下才展开那几件事（默认只给一行，不抢位置）
+      const [secretOpen, setSecretOpen] = React.useState(false)
 
       // 改完立刻存，不要保存键
       const saveCfg = (key, value) => {
@@ -307,6 +326,8 @@ window.__ModuleLoader__.load({
       const defs = data.dimDefs || {}
       const combos = data.combos || []
       const promises = data.promises || []
+      const conflict = data.conflict || null
+      const love = data.love || null
       const axis = data.axis || { value: 50, mid: 50, label: '平静' }
   const grow = data.grow || null
   const growHour = (grow && grow.growHour) || Number((data.config || {}).growHour) || 23
@@ -389,7 +410,7 @@ window.__ModuleLoader__.load({
             h('i', { style: { width: Math.min(100, v) + '%', background: DIM_TONE[k] } }),
             h('span', { className: 'moe-bar-base', style: { left: Math.min(100, base) + '%' }, title: '基线 ' + base }),
           ),
-          h('div', { className: 'moe-dim-val', title: v > 100 ? '冲出上限了，正慢慢落回来' : (why || '') }, String(Math.min(100, v))),
+          h('div', { className: 'moe-dim-val', title: v > 100 ? '冲出上限了，正慢慢落回来' : (why || '') }, String(Math.min(100, Math.round(v)))),
         )
       }
 
@@ -411,7 +432,7 @@ window.__ModuleLoader__.load({
       const settingsGroups = groups.map((g, gi) => {
         const fields = schema.filter((f) => f.group === g)
         if (!fields.length) return null
-        return h('details', { className: 'moe-group', key: g, open: gi < 2 },
+        return h('details', { className: 'moe-group', key: g },
           h('summary', null, g + '（' + fields.length + '）'),
           h('div', { className: 'moe-group-body' },
             ...fields.map((f) => cfgRow(f, cfgNow[f.key], saveCfg)),
@@ -429,9 +450,28 @@ window.__ModuleLoader__.load({
             h('span', { className: 'moe-mood-tag' }, '亲密度'),
             h('span', { className: 'moe-mood-num' }, String(axis.value))),
           h('div', { className: 'moe-mood-sub' },
-            (axis.label || '平静') + ' · 可信度 ' + (st.lastConfidence || 0)),
+            (axis.label || '平静') + ' · 可信度 ' + (st.lastConfidence || 0),
+            // 彩蛋（2026-11-17 用户定）：挂在「可信度」后面，别藏到面板最底下
+            love
+              ? h('span', {
+                  className: 'moe-secret' + (love.on ? ' on' : ''),
+                  title: love.on ? (secretOpen ? '收起' : '点开看看') : '',
+                  onClick: love.on ? () => setSecretOpen(!secretOpen) : undefined,
+                },
+                h('span', { className: 'moe-secret-heart' }, love.on ? '♥' : '♡'),
+                h('span', null, love.on ? '有些事已经发生了' : '有些事还在发生'))
+              : null),
           h('div', { className: 'moe-mood-sub', style: { marginLeft: 'auto' }, title: '插件版本' }, '情绪引擎 v' + VERSION),
         ),
+
+        // 10. 彩蛋展开（达成 + 点开才出现，紧跟在「这会儿」下面）
+        love && love.on && secretOpen
+          ? h('div', { className: 'moe-secret-body', style: { marginTop: -8 }, key: 'secret-body' },
+              h('div', null, '到今天 ' + love.days + ' 天 · 信任 ' + love.trust + ' · 亲密 ' + love.axis),
+              (Array.isArray(st.milestones) ? st.milestones : []).slice(-3).map((m, i) =>
+                h('div', { className: 'moe-secret-ms', key: 'ms' + i }, '「' + (m.text || '') + '」')),
+              h('div', { className: 'moe-secret-note' }, '这不是在设置里选的，是一天天攒出来的。'))
+          : null,
 
         // 2. 平静轴（不是情绪，是「主动做事的密度」）
         h('div', { className: 'moe-axis' },
@@ -452,7 +492,7 @@ window.__ModuleLoader__.load({
             h('i', { style: { width: Math.min(100, trust.value) + '%' } }),
             h('span', { className: 'moe-trust-floor', style: { left: trust.floor + '%' }, title: '底线 ' + trust.floor }),
           ),
-          h('div', { className: 'moe-axis-val' }, String(trust.value)),
+          h('div', { className: 'moe-axis-val', style: { color: TRUST_BAND_COLOR(trust.value) }, title: '信任分档：交心 85+ / 亲近 70+ / 平常 50+ / 收着 30+ / 存疑 20+ / 不信 20 以下' }, String(trust.value) + ' · ' + TRUST_BAND_LABEL(trust.value)),
           trust.supervising
             ? h('div', { className: 'moe-trust-sup', title: '低于 ' + trust.below + '，只盯他明确答应过的事' }, '监督中')
             : null,
@@ -496,12 +536,20 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('div', { className: 'moe-sec' },
-            h('div', { className: 'moe-sec-title' }, '九根维度'),
+            h('div', { className: 'moe-sec-title' }, '十根维度'),
             h('div', { className: 'moe-dims' }, ...order.map((k) => dimRow(k))),
           ),
         ),
 
-        // 5. 组合（四条都列出来，能看出还差多少）
+        // 4.5 「两条鱼」提醒（2026-11-16）：别的同类心情插件还在跑就压一条在最上面
+        conflict && conflict.note
+          ? h('div', { className: 'moe-conflict' },
+              h('div', { className: 'moe-conflict-t' }, '⚠ 检测到另一套心情系统还挂着'),
+              h('div', { className: 'moe-conflict-b' }, conflict.note),
+            )
+          : null,
+
+        // 5. 组合（十条都列出来，能看出还差多少）
         h('div', { className: 'moe-sec' },
           h('div', { className: 'moe-sec-title' }, '组合（只决定语气和动作，不会被念出来）'),
           h('div', { className: 'moe-combos' }, ...combos.map(comboCard)),
@@ -617,6 +665,7 @@ window.__ModuleLoader__.load({
               ))
             : h('div', { className: 'moe-empty' }, '还没有记录'),
         ),
+
       )
     }
 

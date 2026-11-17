@@ -7,7 +7,7 @@
  * 面板因此读不到数据。这个脚本就是把 lib/index.js 当宿主那样挂一遍，
  * 每个路由真跑一次，外加几条关键纯函数，任何一条挂掉都让构建返回失败。
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 process.env.DSH_HOME = mkdtempSync(join(process.env.TEMP || '.', 'emo-check-'))
@@ -25,12 +25,45 @@ console.log('\n[自检] 纯函数')
 const cfg = m.loadConfig()
 ok('配置项齐全（' + Object.keys(cfg).length + ' 项）', Object.keys(cfg).length > 40)
 const chk = m.schemaCheck()
-ok('schema 与默认值对齐', chk.missing.length === 0 && chk.extra.length === 0, JSON.stringify(chk))
-ok('9 根维度', m.DIMS.length === 9)
-ok('4 条组合', m.COMBO_DEFS.length === 4)
+// extra = DEFAULT_CONFIG 里有、但面板不暴露的内部项（爱门槛 / 账本系数 / 干活统计）——
+//   2026-11-17 用户定：这些不给用户调，代码照用，所以 extra 合法；missing 才是真错。
+ok('schema 与默认值对齐（missing 必须为空）', chk.missing.length === 0, JSON.stringify(chk))
+// 白名单式构建的坑（2026-11-17）：schema 撤掉内部项后，buildConfig 只按 schema 铺键，
+//   cfg.loveTrust 之类会静默变 undefined（爱永远不成立、衰减算 NaN）。这里写一份盘上的配置再读回来验。
+mkdirSync(join(process.env.DSH_HOME, 'emotion'), { recursive: true })
+writeFileSync(join(process.env.DSH_HOME, 'emotion', 'config.json'), JSON.stringify({ trustRise: 9 }), 'utf8')
+const cfgDisk = m.loadConfig()
+ok('读盘后配置键数不缩水', Object.keys(cfgDisk).length === Object.keys(m.DEFAULT_CONFIG).length,
+  Object.keys(cfgDisk).length + ' vs ' + Object.keys(m.DEFAULT_CONFIG).length)
+ok('内部项读回来仍有值', Number.isFinite(cfgDisk.loveTrust) && Number.isFinite(cfgDisk.half_spent) && Number.isFinite(cfgDisk.workEvery))
+ok('10 根维度（含压力）', m.DIMS.length === 10)
+ok('10 条组合', m.COMBO_DEFS.length === 10)
 const st = m.loadState(cfg)
 m.decay(st, Date.now(), cfg)
 m.idleTick(st, Date.now(), cfg)
+// 小数账（2026-11-10 用户选 A）：每轮衰减不到 1 点也不能被取整扔掉
+const stD = m.blankState(cfg)
+stD.dims.sad = 71
+let td = Date.now()
+stD.decayedAt = td
+for (let i = 0; i < 30; i++) { td += 2 * 60000; m.decay(stD, td, cfg) }
+ok('连跑 30 轮 × 2 分钟，难过必须真的往下走', stD.dims.sad < 70, '实际 ' + stD.dims.sad + '（老逻辑会冻在 71）')
+ok('衰减后各根仍是整数', Object.values(stD.dims).every((v) => Number.isInteger(v)))
+ok('衰减零头都留在 -1..1 之间', Object.values(stD.dimCarry).every((v) => Math.abs(v) < 1))
+// 会话内主动开口（2026-11-10 用户定「我安静你才开口」）：三种情况都要有明确结果，不能静默吞掉
+ok('sayInSession：没有活会话时返回没成、不抛错', (await m.sayInSession(null, 'x')).ok === false)
+ok('sayInSession：有活会话时走 followup', (await m.sayInSession({ followup: async () => {} }, 'x')).ok === true)
+ok('sayInSession：followup 抛错被接住（不能变成未处理 rejection 杀掉宿主）', (await m.sayInSession({ followup: async () => { throw new Error('busy') } }, 'x')).ok === false)
+// 主动开口的话会以 user 消息回到下一轮（DSH 只能送 user）：必须在注入里认得出是我说的
+const stPing = m.blankState(cfg)
+stPing.lastReason = '他在忙'
+stPing.lastPingText = '你忙啥呢这么久没动静'
+stPing.idlePingAt = Date.now()
+ok('刚主动开过口：注入要提醒那是我自己说的', m.buildInjection(stPing).includes('我自己主动开口'))
+stPing.idlePingAt = Date.now() - 20 * 60000
+ok('二十分钟前的开口不再念叨', !m.buildInjection(stPing).includes('我自己主动开口'))
+stPing.lastPingText = ''
+ok('没开过口时不该出现这句提醒', !m.buildInjection(stPing).includes('我自己主动开口'))
 ok('注入文本能生成', typeof m.buildInjection(st, '用户') === 'string')
 ok('judge 解析可用', !!m.parseDelta('{"moodDelta":1,"dims":{"happy":2},"reason":"x","confidence":70}'))
 // 出门回来：闷只降一点、不归零（2026-11-07 用户定的 10 点）
@@ -151,9 +184,10 @@ if (s.code === 200) {
   try {
     const j = JSON.parse(s.body)
     ok('/state 带 schema（' + (j.schema ? j.schema.length : 0) + ' 项）', Array.isArray(j.schema) && j.schema.length > 40)
-    ok('/state 带 dims/dimLabel', Array.isArray(j.dims) && j.dims.length === 9 && !!j.dimLabel)
+    ok('/state 带 dims/dimLabel', Array.isArray(j.dims) && j.dims.length === 10 && !!j.dimLabel)
+ok('/state 里压力是 0 起的', typeof j.state.dims.stress === 'number', 'stress=' + j.state.dims.stress)
     ok('/state 带 axis/trust', !!j.axis && !!j.trust)
-    ok('/state 带 4 条组合', Array.isArray(j.combos) && j.combos.length === 4)
+    ok('/state 带 10 条组合', Array.isArray(j.combos) && j.combos.some((x) => x && x.name))
     ok('/state 带 state.config', !!j.config && !!j.state)
   } catch (e) {
     ok('/state 是 JSON', false, String(e))

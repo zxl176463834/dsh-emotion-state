@@ -1,7 +1,7 @@
 {
   "name": "dsh-emotion-state",
-  "version": "0.9.0",
-  "description": "给 AI Agent 的情绪引擎：9 维衰减 + 亲密度轴 + 信任 + 组合情绪 + 两本账",
+  "version": "0.10.0",
+  "description": "给 AI Agent 的情绪引擎：十维情绪 + 亲密度轴 + 信任六档 + 十组组合 + 里程碑 + 意愿账",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -12,7 +12,6 @@
   },
   "files": [
     "lib/index.js",
-    "lib/index.js.map",
     "client.js",
     "cordis.patch.yml"
   ],

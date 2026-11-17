@@ -1,10 +1,10 @@
 /**
- * 主动开口的那句话
+ * 「叫人的那句话」
  *
- * 不给固定模板（太干、也不像人），交给模型说一句：把情绪、待机多久、上次聊过什么喂进去，
- * 再给几句口气样例（只给口气，不许照抄）。
+ * 不写死模板：把情绪、待机多久、上次聊过什么喂给模型，让它自己说一句，
+ * 再给几句口气样例（只当风格参考，不许照抄）。
  *
- * 失败、超时、说超长句 —— 一律退回模板，绝不留空。
+ * 失败、超时、说超长句——一律退回模板，绝不留空。
  */
 import { randomUUID } from 'node:crypto'
 
@@ -41,9 +41,8 @@ function modelOf(agent: any): { provider: string; model: string } | null {
 }
 
 /**
- * 生成主动开口的那句话。拿不到模型 / 调用失败 / 输出不像话，都退回模板。
+ * 生成叫人的那句话。拿不到模型 / 调用失败 / 输出不像话，都退回模板。
  * @param idleMin 已经多久没动静（分钟）
- * @param owner 对方的名字
  */
 export async function composePing(ctx: any, agent: any, st: any, idleMin: number, owner = '对方'): Promise<string> {
   const tpl = fallbackPing(st, owner)
@@ -52,7 +51,7 @@ export async function composePing(ctx: any, agent: any, st: any, idleMin: number
   const now = new Date()
   const timeText = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0')
   const sys = [
-    '你现在主动给对方发一条消息。',
+    '现在没人跟你说话，你要主动开口找' + owner + '。',
     '',
     '要求：',
     '- 只输出一句话（不超过 20 字），不要引号、不要解释、不要 emoji。',
@@ -77,7 +76,7 @@ export async function composePing(ctx: any, agent: any, st: any, idleMin: number
         role: 'user',
         id: randomUUID(),
         content: [{ type: 'text', text: user }],
-        source: { kind: 'plugin', plugin: 'dsh-emotion-state' },
+        source: { kind: 'plugin', plugin: 'mo-emotion' },
       }],
       maxTokens: 200,
       // 要灵活，别每次一个腔调
