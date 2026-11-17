@@ -1,5 +1,7 @@
 # 情绪引擎 · dsh-emotion-state
 
+[![release](https://img.shields.io/github/v/release/zxl176463834/dsh-emotion-state?color=2ea043&label=release)](https://github.com/zxl176463834/dsh-emotion-state/releases/latest) [![license](https://img.shields.io/github/license/zxl176463834/dsh-emotion-state?color=0969da)](LICENSE)
+
 > 给 AI Agent 一套**会衰减、会欠账、会积怨**的心情。
 
 大多数「AI 人格」是提示词写出来的：让模型扮演一个开心的人，它就一直开心。
